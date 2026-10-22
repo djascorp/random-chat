@@ -565,6 +565,22 @@
   border-top: 1px solid var(--border);
 }
 
+/* Search-shape menu: room for the mode cards stacked in one column. */
+.popover--wide {
+  width: min(340px, calc(100vw - 40px));
+  display: grid;
+  gap: 12px;
+}
+
+.popover--wide .mode-cards {
+  grid-template-columns: 1fr;
+  max-width: none;
+}
+
+.popover--wide .popover__hint {
+  margin-top: 0;
+}
+
 /* -------------------------------------------------------------------- chat */
 
 .chat {

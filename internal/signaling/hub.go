@@ -331,6 +331,15 @@ func (h *Hub) handleNext(c *Client, env Envelope) {
 		c.SendError("rate_limited", "trop de passages en peu de temps", env.Event)
 		return
 	}
+	// Suivant carries the current search shape so a setting changed mid-call
+	// is already in effect. An empty payload keeps the previous prefs.
+	if len(env.Data) > 0 {
+		if payload, err := decodeData[QueueJoinPayload](env); err == nil {
+			if mode, max, ok := normalizeSearchPrefs(payload); ok {
+				c.SetSearchPrefs(mode, max)
+			}
+		}
+	}
 	if c.State() == matching.StateInCall {
 		h.removeMember(c.SessionID(), c.id, "next", storage.SessionEnded, false)
 	}

@@ -207,6 +207,9 @@ export default function App() {
           microphones={chat.devices.microphones}
           selectedCamera={chat.selectedCamera}
           selectedMicrophone={chat.selectedMicrophone}
+          searchMode={chat.searchMode}
+          searchMax={chat.searchMax}
+          onSearchPrefs={chat.changeSearchPrefs}
           onToggleMic={chat.toggleMic}
           onToggleCam={chat.toggleCam}
           onNext={chat.next}

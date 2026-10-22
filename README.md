@@ -146,6 +146,10 @@ number one cause of connection failure in production.
 
 Endpoint: `GET /ws?cid=<client-id>`
 
+The search shape (Solo vs conference plus the member cap) is chosen on the
+landing screen and can be changed at any time from the control bar menu;
+`Suivant` always searches with the current setting (`session.next` carries it).
+
 The `cid` is an opaque token stored in `localStorage`
 (`^[a-z0-9-]{8,64}$`). It lets blocks and suspensions survive a page reload
 without requiring an account. The server treats it as **untrusted**: it

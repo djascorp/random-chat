@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { SessionMode } from '../types';
 import { BoltIcon, ChatIcon, GlobeIcon, ShieldIcon, SkipIcon, UsersIcon } from './Icons';
+import { SearchPrefs, parseMaxParticipants } from './SearchPrefs';
 
 interface LandingProps {
   online: number | null;
@@ -33,8 +34,9 @@ export function Landing({ online, activeSessions, matchesTotal, turnConfigured, 
   const [mode, setMode] = useState<SessionMode>('solo');
   const [max, setMax] = useState('');
 
-  const parsedMax = max.trim() === '' ? 0 : Number.parseInt(max, 10);
-  const maxValid = max.trim() === '' || (Number.isInteger(parsedMax) && parsedMax >= 2 && parsedMax <= 99);
+  const parsed = parseMaxParticipants(max);
+  const maxValid = parsed !== null;
+  const maxValue = parsed ?? 0;
 
   return (
     <div className="landing">
@@ -55,65 +57,21 @@ export function Landing({ online, activeSessions, matchesTotal, turnConfigured, 
           « suivant » à tout moment.
         </p>
 
-        <div className="mode-cards" role="radiogroup" aria-label="Type de conversation">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={mode === 'solo'}
-            className={`mode-card ${mode === 'solo' ? 'is-selected' : ''}`}
-            onClick={() => setMode('solo')}
-          >
-            <UsersIcon size={22} />
-            <span className="mode-card__title">Solo</span>
-            <span className="mode-card__text">Tête-à-tête classique, comme avant.</span>
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={mode === 'group'}
-            className={`mode-card ${mode === 'group' ? 'is-selected' : ''}`}
-            onClick={() => setMode('group')}
-          >
-            <UsersIcon size={22} />
-            <span className="mode-card__title">Conférence</span>
-            <span className="mode-card__text">Plusieurs participants, bouton Ajouter en cours d’appel.</span>
-          </button>
-        </div>
-
-        {mode === 'group' ? (
-          <label className="max-field">
-            <span className="max-field__label">Participants maximum (vide = sans limite)</span>
-            <input
-              className="max-field__input"
-              type="number"
-              inputMode="numeric"
-              min={2}
-              max={99}
-              step={1}
-              placeholder="Sans limite"
-              value={max}
-              aria-invalid={!maxValid}
-              onChange={(event) => setMax(event.target.value)}
-            />
-            {!maxValid ? (
-              <span className="max-field__error">Choisissez un nombre entre 2 et 99.</span>
-            ) : null}
-          </label>
-        ) : null}
+        <SearchPrefs mode={mode} maxText={max} onModeChange={setMode} onMaxChange={setMax} />
 
         <div className="hero__actions">
           <button
             type="button"
             className="btn btn--primary btn--lg"
-            onClick={() => onStart(mode, maxValid ? parsedMax || 0 : 0)}
+            onClick={() => onStart(mode, maxValue)}
             disabled={busy || !maxValid}
           >
             <span className="btn__pulse" aria-hidden="true" />
             {busy
               ? 'Préparation…'
               : mode === 'group'
-                ? maxValid && parsedMax > 0
-                  ? `Rejoindre une conférence (max ${parsedMax})`
+                ? maxValue > 0
+                  ? `Rejoindre une conférence (max ${maxValue})`
                   : 'Rejoindre une conférence'
                 : 'Démarrer une conversation'}
           </button>

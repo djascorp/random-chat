@@ -1,6 +1,8 @@
 import { useLayoutEffect, useRef } from 'react';
+import type { SessionMode } from '../types';
 import { ChatIcon, MicIcon, MicOffIcon, PhoneOffIcon, SkipIcon, UserPlusIcon, VideoIcon, VideoOffIcon } from './Icons';
 import { DeviceMenu } from './DeviceMenu';
+import { SearchPrefsMenu } from './SearchPrefs';
 import { SessionMenu } from './SessionMenu';
 
 interface ControlBarProps {
@@ -15,6 +17,9 @@ interface ControlBarProps {
   microphones: MediaDeviceInfo[];
   selectedCamera: string | null;
   selectedMicrophone: string | null;
+  searchMode: SessionMode;
+  searchMax: number;
+  onSearchPrefs: (mode: SessionMode, max: number) => void;
   onToggleMic: () => void;
   onToggleCam: () => void;
   onNext: () => void;
@@ -39,6 +44,9 @@ export function ControlBar({
   microphones,
   selectedCamera,
   selectedMicrophone,
+  searchMode,
+  searchMax,
+  onSearchPrefs,
   onToggleMic,
   onToggleCam,
   onNext,
@@ -115,6 +123,8 @@ export function ControlBar({
           onSelectCamera={onSelectCamera}
           onSelectMicrophone={onSelectMicrophone}
         />
+
+        <SearchPrefsMenu mode={searchMode} max={searchMax} onChange={onSearchPrefs} />
       </div>
 
       <div className="controls__group controls__group--primary">

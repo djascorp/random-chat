@@ -369,26 +369,23 @@ export function useRandomChat() {
       void joinQueue();
       return;
     }
+    const prefs = prefsRef.current;
+    const waitingText =
+      prefs.mode === 'group' ? 'Recherche d’une conférence' : 'Recherche d’un interlocuteur';
     if (inCall && sessionRef.current) {
-      client.send(C2S.sessionNext);
+      // The current search shape travels with Suivant so a setting changed
+      // mid-call is already in effect for the next search.
+      client.send(C2S.sessionNext, { mode: prefs.mode, max_participants: prefs.max });
       teardownAllPeers();
       // A new peer means a new conversation: stale bubbles and the previous
       // "session ended" notice must not leak into it.
       setMessages([]);
       setUnread(0);
-      const prefs = prefsRef.current;
-      applyStatus(
-        'waiting',
-        prefs.mode === 'group' ? 'Recherche d’une conférence' : 'Recherche d’un interlocuteur',
-      );
+      applyStatus('waiting', waitingText);
       return;
     }
-    const prefs = prefsRef.current;
     client.send(C2S.queueJoin, { mode: prefs.mode, max_participants: prefs.max });
-    applyStatus(
-      'waiting',
-      prefs.mode === 'group' ? 'Recherche d’une conférence' : 'Recherche d’un interlocuteur',
-    );
+    applyStatus('waiting', waitingText);
   }, [applyStatus, clearTimers, joinQueue, teardownAllPeers]);
 
   const stop = useCallback(() => {
@@ -905,6 +902,7 @@ export function useRandomChat() {
     unread,
     start,
     next,
+    changeSearchPrefs: chooseSearchPrefs,
     stop,
     toggleMic,
     toggleCam,

@@ -437,6 +437,46 @@ func TestNextEndsSessionAndRequeuesOnlyRequester(t *testing.T) {
 	}
 }
 
+// TestNextCarriesSearchPrefs checks that Suivant searches with the settings
+// current at click time: a solo caller switching to group mid-call lands in
+// a conference on the next search.
+func TestNextCarriesSearchPrefs(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	c := dial(t, srv, "client-cccccccc")
+
+	a.send(EvtQueueJoin, nil)
+	b.send(EvtQueueJoin, nil)
+	a.await(EvtMatchFound, 2*time.Second)
+	b.await(EvtMatchFound, 2*time.Second)
+
+	a.send(EvtSessionNext, QueueJoinPayload{Mode: "group", MaxParticipants: 5})
+	a.await(EvtQueueWaiting, 2*time.Second)
+	ended := b.await(EvtSessionEnded, 2*time.Second)
+	var endPayload SessionEndedPayload
+	mustDecode(t, ended.Data, &endPayload)
+	if endPayload.Reason != "next" {
+		t.Fatalf("end reason = %q, want next", endPayload.Reason)
+	}
+
+	joinGroup(t, c, 0)
+	matchA := decodeMatch(t, a.await(EvtMatchFound, 2*time.Second))
+	decodeMatch(t, c.await(EvtMatchFound, 2*time.Second))
+	if matchA["mode"] != "group" {
+		t.Fatalf("next search mode = %v, want group", matchA["mode"])
+	}
+	if got := len(peerIDs(t, matchA)); got != 2 {
+		t.Fatalf("room has %d members, want 2", got)
+	}
+	if hub.sessions.ActiveCount() != 1 {
+		t.Fatalf("active sessions = %d, want 1", hub.sessions.ActiveCount())
+	}
+}
+
 func TestUnknownAndUnauthorizedEventsAreRejected(t *testing.T) {
 	hub := newTestHub(t)
 	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
