@@ -1,0 +1,22 @@
+# Build output
+/bin/
+/web/dist/
+/web/node_modules/
+/web/.layout-shots/
+/web/.layout-profiles/
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Go tooling
+*.test
+*.out
+coverage.txt

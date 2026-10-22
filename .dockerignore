@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+.env.local
+bin
+web/node_modules
+web/dist
+deploy
+**/*.test.go
+.DS_Store

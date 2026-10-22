@@ -1,0 +1,56 @@
+name: random-chat
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: randomchat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-randomchat}
+      POSTGRES_DB: randomchat
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U randomchat -d randomchat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      ADDR: ":8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgres://randomchat:${POSTGRES_PASSWORD:-randomchat}@postgres:5432/randomchat?sslmode=disable
+      # Add every origin the browser will use, including https://your-domain.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # A reachable TURN server is what makes calls work on restrictive networks.
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
+      QUEUE_TIMEOUT: ${QUEUE_TIMEOUT:-90s}
+      AUTO_SUSPEND_AFTER: ${AUTO_SUSPEND_AFTER:-3}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # TURN relays media when a direct peer-to-peer path is impossible.
+  # Host networking is used because TURN needs a wide UDP port range.
+  # Start it with: docker compose --profile turn up -d
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    profiles: ["turn"]
+    network_mode: host
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
