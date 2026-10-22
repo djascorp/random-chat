@@ -432,16 +432,17 @@
 }
 
 @media (max-width: 560px) {
-  /* Anchored to the viewport so the panel can never overflow the right edge, and
-     offset by the measured bar height rather than a guess. */
-  .popover {
-    position: fixed;
-    left: 12px;
-    right: 12px;
-    bottom: calc(var(--controls-height, 76px) + 28px);
+  /* Anchored to the viewport edges instead of centred by a transform: a
+     transformed or filtered ancestor becomes the containing block for the
+     popovers, and a centred bar would give them a shifted reference box. */
+  .controls {
+    left: 10px;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
     width: auto;
-    max-height: 60dvh;
-    overflow-y: auto;
+    max-width: none;
+    transform: none;
+    animation: rise-anchored 0.26s ease-out;
   }
 }
 
@@ -579,6 +580,36 @@
 
 .popover--wide .popover__hint {
   margin-top: 0;
+}
+
+/* On a phone the popover stretches across the control bar and floats above it
+   instead of hanging off its anchor button, where it is wider than the screen.
+   Fixed (not absolute): absolute would anchor to the narrow .device-menu wrapper.
+   The bar's backdrop-filter already makes the bar the containing block for fixed
+   descendants, so this resolves against the bar; without that filter it would
+   resolve against the viewport, which is near-identical at this width. Must stay
+   after the base .popover and .popover--wide rules or source order overrides it. */
+@media (max-width: 560px) {
+  .popover {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + 14px);
+    width: auto;
+    max-height: 60dvh;
+    overflow-y: auto;
+  }
+}
+
+@keyframes rise-anchored {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* -------------------------------------------------------------------- chat */

@@ -21,8 +21,22 @@ interface SearchPrefsProps {
 
 /** Solo vs conference choice with the optional member cap. */
 export function SearchPrefs({ mode, maxText, onModeChange, onMaxChange }: SearchPrefsProps) {
-  const parsed = parseMaxParticipants(maxText);
-  const valid = parsed !== null;
+  const value = parseMaxParticipants(maxText) ?? 0;
+
+  /* Touch stepper instead of a typeable field: 0 means "no limit", and the
+     buttons keep the value inside 2-99 so the caller never sees an invalid
+     state. */
+  const stepMax = (direction: -1 | 1) => {
+    const next =
+      direction === 1
+        ? value === 0
+          ? 2
+          : Math.min(99, value + 1)
+        : value <= 2
+          ? 0
+          : value - 1;
+    onMaxChange(next === 0 ? '' : String(next));
+  };
 
   return (
     <>
@@ -52,24 +66,32 @@ export function SearchPrefs({ mode, maxText, onModeChange, onMaxChange }: Search
       </div>
 
       {mode === 'group' ? (
-        <label className="max-field">
-          <span className="max-field__label">Participants maximum (vide = sans limite)</span>
-          <input
-            className="max-field__input"
-            type="number"
-            inputMode="numeric"
-            min={2}
-            max={99}
-            step={1}
-            placeholder="Sans limite"
-            value={maxText}
-            aria-invalid={!valid}
-            onChange={(event) => onMaxChange(event.target.value)}
-          />
-          {!valid ? (
-            <span className="max-field__error">Choisissez un nombre entre 2 et 99.</span>
-          ) : null}
-        </label>
+        <div className="max-field" role="group" aria-label="Participants maximum">
+          <span className="max-field__label">Participants maximum</span>
+          <div className="stepper">
+            <button
+              type="button"
+              className="stepper__btn"
+              onClick={() => stepMax(-1)}
+              disabled={value === 0}
+              aria-label="Réduire le nombre maximum de participants"
+            >
+              −
+            </button>
+            <span className="stepper__value" aria-live="polite">
+              {value === 0 ? 'Sans limite' : `${value} max`}
+            </span>
+            <button
+              type="button"
+              className="stepper__btn"
+              onClick={() => stepMax(1)}
+              disabled={value === 99}
+              aria-label="Augmenter le nombre maximum de participants"
+            >
+              +
+            </button>
+          </div>
+        </div>
       ) : null}
     </>
   );

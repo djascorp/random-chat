@@ -279,11 +279,18 @@ input {
 
 .landing {
   display: grid;
+  /* minmax(0, 1fr), not auto: an implicit auto track sizes to the hero's
+     max-content (~502px of side-by-side mode cards) and pushes the whole page
+     wider than a phone viewport, clipping everything on the right. */
+  grid-template-columns: minmax(0, 1fr);
   gap: clamp(28px, 5vw, 52px);
 }
 
 .hero {
   display: grid;
+  /* Same minmax(0, 1fr) guard as .landing: an auto track would size to the
+     mode cards' side-by-side max-content and push them past the viewport. */
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   gap: 20px;
   text-align: center;
@@ -346,7 +353,9 @@ input {
 /* Solo vs conference choice on the landing screen. */
 .mode-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  /* min(200px, 100%) keeps the intrinsic track count from forcing two columns
+     on a phone, where the pair is wider than the viewport. */
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: 10px;
   width: 100%;
   max-width: 560px;
@@ -425,7 +434,7 @@ input {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(148px, 100%), 1fr));
   gap: 10px;
   width: 100%;
   max-width: 600px;
@@ -455,7 +464,7 @@ input {
 
 .steps {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   gap: 14px;
 }
 
@@ -505,7 +514,7 @@ input {
 
 .safety {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   gap: 12px;
 }
 
