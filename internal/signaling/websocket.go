@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"random-chat/internal/matching"
+	"random-chat/internal/storage"
 )
 
 // Client is one WebSocket connection. It is the only writer of its socket: every
@@ -32,6 +33,11 @@ type Client struct {
 	state     matching.State
 	partnerID string
 	sessionID string
+	// mode and maxParticipants are the call shape requested at queue.join
+	// time: "solo" (strict 1:1) or "group" (conference), with an optional cap
+	// where 0 means the caller sets no constraint.
+	mode            string
+	maxParticipants int
 	matchedAt time.Time
 	joinedAt  time.Time
 
@@ -96,6 +102,31 @@ func (c *Client) SessionID() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.sessionID
+}
+
+// Mode implements matching.Peer.
+func (c *Client) Mode() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.mode == "" {
+		return storage.SessionSolo
+	}
+	return c.mode
+}
+
+// MaxParticipants implements matching.Peer.
+func (c *Client) MaxParticipants() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.maxParticipants
+}
+
+// SetSearchPrefs records the call shape requested at queue.join time.
+func (c *Client) SetSearchPrefs(mode string, max int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mode = mode
+	c.maxParticipants = max
 }
 
 // Bind implements matching.Peer.

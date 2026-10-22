@@ -1,19 +1,30 @@
-// Package sessions owns the lifecycle of 1:1 pairings. It guarantees that a
-// participant is mapped to at most one active session at a time.
+// Package sessions owns the lifecycle of calls. It guarantees that a
+// participant is mapped to at most one active session at a time, whether the
+// session is a 1:1 pairing or a group conference.
 package sessions
 
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
 	"random-chat/internal/storage"
 )
 
+// sortByStarted orders sessions oldest first so fills prefer the longest
+// waiting room.
+func sortByStarted(sessions []*storage.Session) {
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].StartedAt.Before(sessions[j].StartedAt)
+	})
+}
+
 // recorder is the narrow persistence port needed here; storage.Store satisfies it.
 type recorder interface {
 	CreateSession(ctx context.Context, s *storage.Session) error
+	AddSessionParticipant(ctx context.Context, sessionID, peerID string) error
 	EndSession(ctx context.Context, id string, at time.Time, status storage.SessionStatus, reason string) error
 }
 
@@ -36,30 +47,96 @@ func NewManager(store recorder, log *slog.Logger) *Manager {
 	}
 }
 
-// Create registers a new active session between two participants and returns it.
+// Create registers a new active session between the given participants.
 // Identifiers are 128-bit random so peers can never guess a session they are not
-// part of.
-func (m *Manager) Create(a, b string) *storage.Session {
+// part of. max caps the conference size; 0 means the members set no constraint.
+func (m *Manager) Create(members []string, mode string, max int) *storage.Session {
 	s := &storage.Session{
-		ID:           storage.NewID(),
-		ParticipantA: a,
-		ParticipantB: b,
-		StartedAt:    time.Now().UTC(),
-		Status:       storage.SessionActive,
+		ID:              storage.NewID(),
+		Participants:    append([]string(nil), members...),
+		Mode:            mode,
+		MaxParticipants: max,
+		StartedAt:       time.Now().UTC(),
+		Status:          storage.SessionActive,
 	}
 	m.mu.Lock()
 	m.active[s.ID] = s
-	m.byPeer[a] = s.ID
-	m.byPeer[b] = s.ID
+	for _, p := range s.Participants {
+		m.byPeer[p] = s.ID
+	}
 	m.mu.Unlock()
 
 	if m.store != nil {
 		// The store receives a snapshot: `s` is mutated again by End while the
 		// write is in flight, and sharing the pointer would be a data race.
 		snapshot := *s
+		snapshot.Participants = append([]string(nil), s.Participants...)
 		m.persist(func(ctx context.Context) error { return m.store.CreateSession(ctx, &snapshot) })
 	}
 	return s
+}
+
+// AddMember pulls a participant into a live session and returns it.
+// Late joiners keep the session open instead of starting a new call.
+func (m *Manager) AddMember(id, peer string) (*storage.Session, bool) {
+	m.mu.Lock()
+	s, ok := m.active[id]
+	if !ok || s.Has(peer) {
+		m.mu.Unlock()
+		return s, false
+	}
+	s.Participants = append(s.Participants, peer)
+	m.byPeer[peer] = id
+	m.mu.Unlock()
+
+	if m.store != nil {
+		m.persist(func(ctx context.Context) error { return m.store.AddSessionParticipant(ctx, id, peer) })
+	}
+	return s, true
+}
+
+// RemoveMember detaches a participant from a live session. It returns the
+// session and whether no member is left, in which case the caller ends it.
+func (m *Manager) RemoveMember(id, peer string) (*storage.Session, bool) {
+	m.mu.Lock()
+	s, ok := m.active[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil, false
+	}
+	kept := s.Participants[:0]
+	for _, p := range s.Participants {
+		if p != peer {
+			kept = append(kept, p)
+		}
+	}
+	// Preserve join order without aliasing surprises for concurrent readers:
+	// Participants() already hands out copies.
+	s.Participants = append([]string(nil), kept...)
+	if m.byPeer[peer] == id {
+		delete(m.byPeer, peer)
+	}
+	empty := len(s.Participants) == 0
+	m.mu.Unlock()
+	return s, empty
+}
+
+// GroupSessions returns a snapshot of the live conferences, oldest first.
+// The matcher uses it to fill existing rooms before opening new ones.
+func (m *Manager) GroupSessions() []*storage.Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*storage.Session
+	for _, s := range m.active {
+		if s.Mode != storage.SessionGroup {
+			continue
+		}
+		cpy := *s
+		cpy.Participants = append([]string(nil), s.Participants...)
+		out = append(out, &cpy)
+	}
+	sortByStarted(out)
+	return out
 }
 
 // Get returns the active session with this id, if any.
@@ -93,7 +170,7 @@ func (m *Manager) End(id string, status storage.SessionStatus, reason string) (*
 		return nil, false
 	}
 	delete(m.active, id)
-	for _, p := range s.Participants() {
+	for _, p := range s.Members() {
 		if m.byPeer[p] == id {
 			delete(m.byPeer, p)
 		}

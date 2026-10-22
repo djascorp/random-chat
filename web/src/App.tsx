@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRandomChat } from './hooks/useRandomChat';
+import type { SessionMode } from './types';
 import { Landing } from './components/Landing';
 import { CallStage } from './components/CallStage';
 import { ControlBar } from './components/ControlBar';
@@ -14,11 +15,16 @@ const DEFAULT_MAX_RUNES = 1000;
 export default function App() {
   const chat = useRandomChat();
   const [reportOpen, setReportOpen] = useState(false);
+  const [reportTarget, setReportTarget] = useState<string | null>(null);
 
   const active = chat.status !== 'idle';
   const inCall =
     chat.status === 'connected' || chat.status === 'connecting' || chat.status === 'reconnecting';
   const showControls = active && chat.status !== 'error';
+  const isGroup = chat.sessionMode === 'group';
+  const membersCount = chat.members.length;
+  const canAdd =
+    isGroup && inCall && (chat.sessionMax === 0 || membersCount < chat.sessionMax);
 
   const maxRunes = chat.hello?.limits.max_chat_runes ?? DEFAULT_MAX_RUNES;
   const turnConfigured =
@@ -29,12 +35,49 @@ export default function App() {
 
   const handleRetry = useCallback(() => {
     chat.dismissError();
-    void chat.start();
+    void chat.start(chat.searchMode, chat.searchMax);
   }, [chat]);
 
   const handleBack = useCallback(() => {
     chat.stop();
   }, [chat]);
+
+  const handleStart = useCallback(
+    (mode: SessionMode, max: number) => {
+      void chat.start(mode, max);
+    },
+    [chat],
+  );
+
+  // Tiles in a conference act on one peer; the solo Plus menu acts on the
+  // single other participant by default.
+  const reportTargets = chat.remotePeers.map((peer, index) => ({
+    id: peer.id,
+    label: `Participant ${index + 2}`,
+  }));
+
+  const reportPeerIds = chat.remotePeers.map((peer) => peer.id).join(',');
+  const openReport = useCallback(
+    (peerId?: string) => {
+      setReportTarget(peerId ?? reportPeerIds.split(',')[0] ?? null);
+      setReportOpen(true);
+    },
+    [reportPeerIds],
+  );
+
+  const handleReportPeer = useCallback(
+    (peerId: string) => {
+      openReport(peerId);
+    },
+    [openReport],
+  );
+
+  const handleBlockPeer = useCallback(
+    (peerId: string) => {
+      chat.blockPeer(peerId);
+    },
+    [chat],
+  );
 
   // Keyboard shortcuts for the in-call bar. Ignored while typing, while the
   // consent gate is showing, or before a session exists.
@@ -60,6 +103,10 @@ export default function App() {
         case 'q':
           event.preventDefault();
           chat.stop();
+          break;
+        case 'a':
+          event.preventDefault();
+          chat.addParticipant();
           break;
         case 'm':
           event.preventDefault();
@@ -120,15 +167,20 @@ export default function App() {
           <CallStage
             status={chat.status}
             statusDetail={chat.statusDetail}
-            remoteStream={chat.remoteStream}
+            remotePeers={chat.remotePeers}
             localStream={chat.localStream}
             camEnabled={chat.camEnabled}
             micEnabled={chat.micEnabled}
             sessionSeconds={chat.sessionSeconds}
             quality={chat.quality}
+            sessionMode={chat.sessionMode}
+            sessionMax={chat.sessionMax}
+            membersCount={membersCount}
             error={chat.error}
             onRetry={handleRetry}
             onBack={handleBack}
+            onReportPeer={handleReportPeer}
+            onBlockPeer={handleBlockPeer}
           />
         ) : (
           <Landing
@@ -136,7 +188,7 @@ export default function App() {
             activeSessions={chat.publicStats?.active_sessions ?? null}
             matchesTotal={chat.publicStats?.matches_total ?? null}
             turnConfigured={turnConfigured}
-            onStart={() => void chat.start()}
+            onStart={handleStart}
             busy={false}
           />
         )}
@@ -147,6 +199,8 @@ export default function App() {
           micEnabled={chat.micEnabled}
           camEnabled={chat.camEnabled}
           inCall={inCall}
+          isGroup={isGroup}
+          canAdd={canAdd}
           chatOpen={chat.chatOpen}
           unread={chat.unread}
           cameras={chat.devices.cameras}
@@ -157,9 +211,10 @@ export default function App() {
           onToggleCam={chat.toggleCam}
           onNext={chat.next}
           onStop={chat.stop}
+          onAdd={chat.addParticipant}
           onToggleChat={() => chat.setChatOpen(!chat.chatOpen)}
-          onReport={() => setReportOpen(true)}
-          onBlock={chat.blockPeer}
+          onReport={() => openReport()}
+          onBlock={() => chat.blockPeer(reportTargets[0]?.id)}
           onSelectCamera={(deviceId) => void chat.switchCamera(deviceId)}
           onSelectMicrophone={(deviceId) => void chat.switchMicrophone(deviceId)}
         />
@@ -177,8 +232,12 @@ export default function App() {
 
       <ReportDialog
         open={reportOpen}
+        targets={reportTargets}
+        initialTargetId={reportTarget}
         onClose={() => setReportOpen(false)}
-        onSubmit={chat.submitReport}
+        onSubmit={(category, reason, block, targetId) =>
+          chat.submitReport(category, reason, block, targetId || undefined)
+        }
       />
 
       {!chat.consentAccepted ? <ConsentGate onAccept={chat.acceptConsent} /> : null}

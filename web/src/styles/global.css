@@ -343,6 +343,86 @@ input {
   color: var(--muted);
 }
 
+/* Solo vs conference choice on the landing screen. */
+.mode-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  width: 100%;
+  max-width: 560px;
+}
+
+.mode-card {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  padding: 16px;
+  text-align: left;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted-strong);
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+
+.mode-card:hover {
+  border-color: var(--border-strong);
+}
+
+.mode-card.is-selected {
+  color: var(--text);
+  border-color: var(--signal-border);
+  background: var(--signal-soft);
+}
+
+.mode-card__title {
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.mode-card__text {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.max-field {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+
+.max-field__label {
+  font-size: 12.5px;
+  color: var(--muted-strong);
+}
+
+.max-field__input {
+  width: 160px;
+  padding: 10px 14px;
+  text-align: center;
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-variant-numeric: tabular-nums;
+}
+
+.max-field__input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.07);
+}
+
+.max-field__input[aria-invalid='true'] {
+  border-color: var(--bad-border);
+}
+
+.max-field__error {
+  font-size: 12px;
+  color: var(--bad);
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
@@ -552,6 +632,111 @@ input {
   object-fit: cover;
   display: block;
   background: #050506;
+}
+
+/* Conference grid: tiles share the frame, the HUD and the self view float
+   above exactly like in solo mode. */
+.stage__videos {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  background: #050506;
+  align-content: center;
+}
+
+.tile {
+  position: relative;
+  min-height: 140px;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #0c0c0f;
+}
+
+.tile__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #050506;
+}
+
+.tile__waiting {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  height: 100%;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.tile__label {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 3px 9px;
+  font-size: 11px;
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(9, 9, 10, 0.76);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.tile__actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.tile:hover .tile__actions,
+.tile:focus-within .tile__actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .tile__actions {
+    opacity: 1;
+  }
+}
+
+.tile__btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--muted-strong);
+  background: rgba(9, 9, 10, 0.78);
+  border: 1px solid var(--border-strong);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+
+.tile__btn:hover {
+  color: var(--text);
+  background: rgba(20, 20, 23, 0.9);
+}
+
+.tile__btn--danger {
+  color: #f0b6bb;
+}
+
+.tile__btn--danger:hover {
+  color: #ffd8dc;
+  background: var(--bad-soft);
 }
 
 .stage__scrim {

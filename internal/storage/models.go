@@ -55,15 +55,24 @@ const (
 	SessionReported SessionStatus = "reported"
 )
 
-// Session is one 1:1 pairing between two participants.
+// Session modes: a strict 1:1 pairing, or a group conference that late
+// joiners can be pulled into while it has room.
+const (
+	SessionSolo  = "solo"
+	SessionGroup = "group"
+)
+
+// Session is one call between two or more participants. MaxParticipants caps
+// the conference size; 0 means the members set no constraint.
 type Session struct {
-	ID           string        `json:"id"`
-	ParticipantA string        `json:"participant_a"`
-	ParticipantB string        `json:"participant_b"`
-	StartedAt    time.Time     `json:"started_at"`
-	EndedAt      *time.Time    `json:"ended_at,omitempty"`
-	Status       SessionStatus `json:"status"`
-	EndReason    string        `json:"end_reason,omitempty"`
+	ID              string        `json:"id"`
+	Participants    []string      `json:"participants"`
+	Mode            string        `json:"mode"`
+	MaxParticipants int           `json:"max_participants"`
+	StartedAt       time.Time     `json:"started_at"`
+	EndedAt         *time.Time    `json:"ended_at,omitempty"`
+	Status          SessionStatus `json:"status"`
+	EndReason       string        `json:"end_reason,omitempty"`
 }
 
 // Duration returns the session length, using now for still-active sessions.
@@ -75,8 +84,42 @@ func (s *Session) Duration(now time.Time) time.Duration {
 	return end.Sub(s.StartedAt)
 }
 
-// Participants returns both participant identifiers.
-func (s *Session) Participants() [2]string { return [2]string{s.ParticipantA, s.ParticipantB} }
+// Members returns a copy of the member identifiers in join order.
+func (s *Session) Members() []string {
+	out := make([]string, len(s.Participants))
+	copy(out, s.Participants)
+	return out
+}
+
+// Has reports whether peer is a member of the session.
+func (s *Session) Has(peer string) bool {
+	for _, p := range s.Participants {
+		if p == peer {
+			return true
+		}
+	}
+	return false
+}
+
+// Full reports whether the session reached its member cap.
+func (s *Session) Full() bool {
+	return s.MaxParticipants > 0 && len(s.Participants) >= s.MaxParticipants
+}
+
+// Fits reports whether extra newcomers keep the session within its cap and
+// within the newcomer's own limit (0 means no constraint on that side).
+func (s *Session) Fits(extra, newcomerMax int) bool {
+	if s.Full() {
+		return false
+	}
+	if s.MaxParticipants > 0 && len(s.Participants)+extra > s.MaxParticipants {
+		return false
+	}
+	if newcomerMax > 0 && len(s.Participants)+extra > newcomerMax {
+		return false
+	}
+	return true
+}
 
 // ReportStatus tracks moderation triage.
 type ReportStatus string

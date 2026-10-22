@@ -37,11 +37,33 @@ export interface ServerHello {
   };
 }
 
+export type SessionMode = 'solo' | 'group';
+
+export interface QueueJoinPayload {
+  mode?: SessionMode;
+  max_participants?: number;
+}
+
 export interface MatchFound {
   session_id: string;
-  peer_id: string;
-  role: 'offerer' | 'answerer';
+  peers: string[];
+  mode: SessionMode;
+  max_participants: number;
+  peer_id?: string;
+  role?: 'offerer' | 'answerer';
   started_at: string;
+}
+
+export interface PeerJoined {
+  session_id: string;
+  peer_id: string;
+}
+
+export interface PeerLeft {
+  session_id: string;
+  peer_id: string;
+  reason: string;
+  members: number;
 }
 
 export interface QueueWaiting {
@@ -59,6 +81,8 @@ export interface SessionEnded {
 export interface SDPPayload {
   type: 'offer' | 'answer';
   sdp: string;
+  to?: string;
+  from?: string;
 }
 
 export interface ICEPayload {
@@ -66,6 +90,8 @@ export interface ICEPayload {
   sdpMid?: string | null;
   sdpMLineIndex?: number | null;
   usernameFragment?: string | null;
+  to?: string;
+  from?: string;
 }
 
 export interface IncomingChatMessage {
@@ -93,6 +119,7 @@ export const C2S = {
   queueCancel: 'queue.cancel',
   sessionNext: 'session.next',
   sessionLeave: 'session.leave',
+  sessionAdd: 'session.add',
   rtcOffer: 'rtc.offer',
   rtcAnswer: 'rtc.answer',
   rtcIce: 'rtc.ice',
@@ -110,6 +137,8 @@ export const S2C = {
   queueTimeout: 'queue.timeout',
   matchFound: 'match.found',
   sessionEnded: 'session.ended',
+  peerJoined: 'peer.joined',
+  peerLeft: 'peer.left',
   chatMessage: 'chat.message',
   chatAck: 'chat.ack',
   reportAck: 'report.ack',

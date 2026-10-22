@@ -1,19 +1,31 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { REPORT_CATEGORIES } from '../types';
 import { CloseIcon, ShieldIcon } from './Icons';
 
 interface ReportDialogProps {
   open: boolean;
+  targets: { id: string; label: string }[];
+  initialTargetId: string | null;
   onClose: () => void;
-  onSubmit: (category: string, reason: string, block: boolean) => void;
+  onSubmit: (category: string, reason: string, block: boolean, targetId: string) => void;
 }
 
-export function ReportDialog({ open, onClose, onSubmit }: ReportDialogProps) {
+export function ReportDialog({ open, targets, initialTargetId, onClose, onSubmit }: ReportDialogProps) {
   const [category, setCategory] = useState<string>('harassment');
   const [reason, setReason] = useState('');
   const [block, setBlock] = useState(true);
+  const [targetId, setTargetId] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setTargetId(initialTargetId ?? targets[0]?.id ?? '');
+      setReason('');
+    }
+  }, [open, initialTargetId, targets]);
 
   if (!open) return null;
+
+  const needsChoice = targets.length > 1;
 
   return (
     <div className="overlay" role="dialog" aria-modal="true" aria-labelledby="report-title">
@@ -27,13 +39,33 @@ export function ReportDialog({ open, onClose, onSubmit }: ReportDialogProps) {
               Signaler cet interlocuteur
             </h2>
             <p className="modal__lead">
-              La session sera fermée et le signalement transmis à la modération.
+              La personne sera exclue de la session et le signalement transmis à la modération.
             </p>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Fermer">
             <CloseIcon size={18} />
           </button>
         </div>
+
+        {needsChoice ? (
+          <div className="field">
+            <span className="field__label">Participant concerné</span>
+            <div className="chips" role="radiogroup" aria-label="Participant concerné">
+              {targets.map((target) => (
+                <button
+                  key={target.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={targetId === target.id}
+                  className={`chip ${targetId === target.id ? 'is-selected' : ''}`}
+                  onClick={() => setTargetId(target.id)}
+                >
+                  {target.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="field">
           <span className="field__label">Motif principal</span>
@@ -75,8 +107,9 @@ export function ReportDialog({ open, onClose, onSubmit }: ReportDialogProps) {
           <button
             type="button"
             className="btn btn--danger"
+            disabled={needsChoice && !targetId}
             onClick={() => {
-              onSubmit(category, reason, block);
+              onSubmit(category, reason, block, targetId);
               onClose();
             }}
           >

@@ -7,14 +7,22 @@ import {
   type ICEPayload,
   type IncomingChatMessage,
   type MatchFound,
+  type PeerJoined,
+  type PeerLeft,
   type PeerStats,
   type PublicStats,
   type ServerErrorPayload,
   type ServerHello,
   type SessionEnded,
+  type SessionMode,
   type SDPPayload,
   type Toast,
 } from '../types';
+
+export interface RemotePeer {
+  id: string;
+  stream: MediaStream | null;
+}
 import { SignalingClient, persistentClientId, signalingUrl } from '../lib/signaling';
 import { RtcPeer } from '../lib/webrtc';
 
@@ -41,7 +49,15 @@ export function useRandomChat() {
   const [hello, setHello] = useState<ServerHello | null>(null);
   const [publicStats, setPublicStats] = useState<PublicStats | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  // One entry per remote participant, in server join order minus ourselves.
+  const [remotePeers, setRemotePeers] = useState<RemotePeer[]>([]);
+  const [myId, setMyId] = useState('');
+  const [members, setMembers] = useState<string[]>([]);
+  const [sessionMode, setSessionMode] = useState<SessionMode>('solo');
+  const [sessionMax, setSessionMax] = useState(0);
+  // Search prefs chosen on the landing screen; reused by Next.
+  const [searchMode, setSearchMode] = useState<SessionMode>('solo');
+  const [searchMax, setSearchMax] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
@@ -58,10 +74,13 @@ export function useRandomChat() {
 
   const signalingRef = useRef<SignalingClient | null>(null);
   const connectingRef = useRef<Promise<SignalingClient> | null>(null);
-  const rtcRef = useRef<RtcPeer | null>(null);
+  // Full mesh: one RTCPeerConnection per remote participant.
+  const peersRef = useRef(new Map<string, RtcPeer>());
+  const connectedRef = useRef(new Set<string>());
   const localStreamRef = useRef<MediaStream | null>(null);
   const sessionRef = useRef<string>('');
-  const roleRef = useRef<'offerer' | 'answerer' | null>(null);
+  const myIdRef = useRef('');
+  const prefsRef = useRef<{ mode: SessionMode; max: number }>({ mode: 'solo', max: 0 });
   const statusRef = useRef<CallStatus>('idle');
   const chatOpenRef = useRef(false);
   const iceServersRef = useRef<RTCIceServer[]>([]);
@@ -118,36 +137,62 @@ export function useRandomChat() {
     }
   }, []);
 
-  const teardownPeer = useCallback(() => {
+  const teardownAllPeers = useCallback(() => {
     clearTimers();
-    rtcRef.current?.close();
-    rtcRef.current = null;
+    for (const peer of peersRef.current.values()) peer.close();
+    peersRef.current.clear();
+    connectedRef.current.clear();
     sessionRef.current = '';
-    roleRef.current = null;
     restartAttemptsRef.current = 0;
-    setRemoteStream(null);
+    setRemotePeers([]);
+    setMembers([]);
     setQuality(null);
     setSessionSeconds(0);
   }, [clearTimers]);
 
-  /** Creates the peer connection lazily and attaches the local tracks once. */
-  const ensurePeer = useCallback((): RtcPeer => {
-    if (rtcRef.current) return rtcRef.current;
-    const peer = new RtcPeer({
-      iceServers: iceServersRef.current,
-      onIceCandidate: (candidate) => {
-        signalingRef.current?.send(C2S.rtcIce, candidate);
-      },
-      onRemoteStream: (stream) => setRemoteStream(stream),
-      onConnectionState: (state) => handlersRef.current.onConnectionState(state),
-      onIceConnectionState: (state) => {
-        if (state === 'failed') handlersRef.current.onIceFailed();
-      },
+  const setPeerStream = useCallback((peerId: string, stream: MediaStream | null) => {
+    setRemotePeers((previous) => {
+      if (!previous.some((p) => p.id === peerId)) return previous;
+      return previous.map((p) => (p.id === peerId ? { ...p, stream } : p));
     });
-    if (localStreamRef.current) peer.attachLocalStream(localStreamRef.current);
-    rtcRef.current = peer;
-    return peer;
   }, []);
+
+  const dropPeerConnection = useCallback(
+    (peerId: string) => {
+      peersRef.current.get(peerId)?.close();
+      peersRef.current.delete(peerId);
+      connectedRef.current.delete(peerId);
+      setRemotePeers((previous) => previous.filter((p) => p.id !== peerId));
+      setMembers((previous) => previous.filter((id) => id !== peerId));
+    },
+    [],
+  );
+
+  /** Creates the connection to one remote peer and attaches local tracks. */
+  const ensurePeerConnection = useCallback(
+    (peerId: string): RtcPeer => {
+      const existing = peersRef.current.get(peerId);
+      if (existing) return existing;
+      const peer = new RtcPeer({
+        iceServers: iceServersRef.current,
+        onIceCandidate: (candidate) => {
+          signalingRef.current?.send(C2S.rtcIce, { ...candidate, to: peerId });
+        },
+        onRemoteStream: (stream) => setPeerStream(peerId, stream),
+        onConnectionState: (state) => handlersRef.current.onConnectionState(state, peerId),
+        onIceConnectionState: (state) => {
+          if (state === 'failed') handlersRef.current.onIceFailed(peerId);
+        },
+      });
+      if (localStreamRef.current) peer.attachLocalStream(localStreamRef.current);
+      peersRef.current.set(peerId, peer);
+      setRemotePeers((previous) =>
+        previous.some((p) => p.id === peerId) ? previous : [...previous, { id: peerId, stream: null }],
+      );
+      return peer;
+    },
+    [setPeerStream],
+  );
 
   const startSessionClocks = useCallback(() => {
     const startedAt = Date.now();
@@ -193,6 +238,8 @@ export function useRandomChat() {
     client.on(S2C.queueTimeout, () => handlersRef.current.onQueueTimeout());
     client.on(S2C.matchFound, (data: MatchFound) => handlersRef.current.onMatchFound(data));
     client.on(S2C.sessionEnded, (data: SessionEnded) => handlersRef.current.onSessionEnded(data));
+    client.on(S2C.peerJoined, (data: PeerJoined) => handlersRef.current.onPeerJoined(data));
+    client.on(S2C.peerLeft, (data: PeerLeft) => handlersRef.current.onPeerLeft(data));
     client.on(S2C.chatMessage, (data: IncomingChatMessage) => handlersRef.current.onChatMessage(data));
     client.on(S2C.chatAck, () => handlersRef.current.onChatAck());
     client.on(S2C.reportAck, () => handlersRef.current.onReportAck());
@@ -242,9 +289,17 @@ export function useRandomChat() {
     clearTimers();
     try {
       const client = await ensureSignaling();
-      if (!client.send(C2S.queueJoin)) throw new Error('socket de signalisation indisponible');
+      const prefs = prefsRef.current;
+      const payload: { mode: SessionMode; max_participants: number } =
+        prefs.mode === 'group'
+          ? { mode: prefs.mode, max_participants: prefs.max }
+          : { mode: prefs.mode, max_participants: 0 };
+      if (!client.send(C2S.queueJoin, payload)) throw new Error('socket de signalisation indisponible');
       setQueuePosition(0);
-      applyStatus('waiting', 'Recherche d’un interlocuteur');
+      applyStatus(
+        'waiting',
+        prefs.mode === 'group' ? 'Recherche d’une conférence' : 'Recherche d’un interlocuteur',
+      );
       if (navigator.mediaDevices) void refreshDevices();
     } catch (err) {
       // The close handler has already explained a refused handshake; keep its
@@ -257,39 +312,50 @@ export function useRandomChat() {
     }
   }, [applyStatus, clearTimers, ensureSignaling, pushToast, refreshDevices]);
 
-  const start = useCallback(async () => {
-    setError(null);
-    setMessages([]);
-    setUnread(0);
-    applyStatus('requesting-media', 'Autorisation caméra et micro');
+  const chooseSearchPrefs = useCallback((mode: SessionMode, max: number) => {
+    const safeMax = mode === 'group' && max >= 2 ? Math.floor(max) : 0;
+    prefsRef.current = { mode, max: safeMax };
+    setSearchMode(mode);
+    setSearchMax(safeMax);
+  }, []);
 
-    if (!navigator.mediaDevices?.getUserMedia) {
-      const message = 'Ce navigateur ne donne pas accès à la caméra (HTTPS requis).';
-      setError(message);
-      applyStatus('error', message);
-      return;
-    }
+  const start = useCallback(
+    async (mode: SessionMode = 'solo', max = 0) => {
+      chooseSearchPrefs(mode, max);
+      setError(null);
+      setMessages([]);
+      setUnread(0);
+      applyStatus('requesting-media', 'Autorisation caméra et micro');
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      localStreamRef.current = stream;
-      setLocalStream(stream);
-      setMicEnabled(true);
-      setCamEnabled(true);
-      for (const track of stream.getAudioTracks()) track.enabled = true;
-      for (const track of stream.getVideoTracks()) track.enabled = true;
-      await refreshDevices();
-      await joinQueue();
-    } catch (err) {
-      const message = describeMediaError(err);
-      setError(message);
-      applyStatus('error', message);
-      pushToast('error', 'Accès caméra refusé', message);
-    }
-  }, [applyStatus, joinQueue, pushToast, refreshDevices]);
+      if (!navigator.mediaDevices?.getUserMedia) {
+        const message = 'Ce navigateur ne donne pas accès à la caméra (HTTPS requis).';
+        setError(message);
+        applyStatus('error', message);
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+        setMicEnabled(true);
+        setCamEnabled(true);
+        for (const track of stream.getAudioTracks()) track.enabled = true;
+        for (const track of stream.getVideoTracks()) track.enabled = true;
+        await refreshDevices();
+        await joinQueue();
+      } catch (err) {
+        const message = describeMediaError(err);
+        setError(message);
+        applyStatus('error', message);
+        pushToast('error', 'Accès caméra refusé', message);
+      }
+    },
+    [applyStatus, chooseSearchPrefs, joinQueue, pushToast, refreshDevices],
+  );
 
   const next = useCallback(() => {
     const inCall =
@@ -305,22 +371,30 @@ export function useRandomChat() {
     }
     if (inCall && sessionRef.current) {
       client.send(C2S.sessionNext);
-      teardownPeer();
+      teardownAllPeers();
       // A new peer means a new conversation: stale bubbles and the previous
       // "session ended" notice must not leak into it.
       setMessages([]);
       setUnread(0);
-      applyStatus('waiting', 'Recherche d’un interlocuteur');
+      const prefs = prefsRef.current;
+      applyStatus(
+        'waiting',
+        prefs.mode === 'group' ? 'Recherche d’une conférence' : 'Recherche d’un interlocuteur',
+      );
       return;
     }
-    client.send(C2S.queueJoin);
-    applyStatus('waiting', 'Recherche d’un interlocuteur');
-  }, [applyStatus, clearTimers, joinQueue, teardownPeer]);
+    const prefs = prefsRef.current;
+    client.send(C2S.queueJoin, { mode: prefs.mode, max_participants: prefs.max });
+    applyStatus(
+      'waiting',
+      prefs.mode === 'group' ? 'Recherche d’une conférence' : 'Recherche d’un interlocuteur',
+    );
+  }, [applyStatus, clearTimers, joinQueue, teardownAllPeers]);
 
   const stop = useCallback(() => {
     signalingRef.current?.send(C2S.sessionLeave);
     clearTimers();
-    teardownPeer();
+    teardownAllPeers();
     signalingRef.current?.close(1000, 'user_left');
     signalingRef.current = null;
     helloReceivedRef.current = false;
@@ -331,7 +405,7 @@ export function useRandomChat() {
     setUnread(0);
     setSessionSeconds(0);
     applyStatus('idle');
-  }, [applyStatus, clearTimers, teardownPeer]);
+  }, [applyStatus, clearTimers, teardownAllPeers]);
 
   const toggleMic = useCallback(() => {
     const stream = localStreamRef.current;
@@ -374,7 +448,9 @@ export function useRandomChat() {
         if (!track) return;
         track.enabled = camEnabledRef.current;
         localStreamRef.current?.getVideoTracks().forEach((existing) => existing.stop());
-        if (rtcRef.current) await rtcRef.current.replaceTrack('video', track);
+        for (const peer of peersRef.current.values()) {
+          await peer.replaceTrack('video', track);
+        }
         rebuildLocalStream('video', track);
         selectedCameraRef.current = deviceId;
         setSelectedCamera(deviceId);
@@ -396,7 +472,9 @@ export function useRandomChat() {
         if (!track) return;
         track.enabled = micEnabled;
         localStreamRef.current?.getAudioTracks().forEach((existing) => existing.stop());
-        if (rtcRef.current) await rtcRef.current.replaceTrack('audio', track);
+        for (const peer of peersRef.current.values()) {
+          await peer.replaceTrack('audio', track);
+        }
         rebuildLocalStream('audio', track);
         selectedMicrophoneRef.current = deviceId;
         setSelectedMicrophone(deviceId);
@@ -425,28 +503,43 @@ export function useRandomChat() {
     [pushToast],
   );
 
-  const blockPeer = useCallback(() => {
-    const client = signalingRef.current;
-    if (!client?.isOpen || !sessionRef.current) {
-      pushToast('warn', 'Aucun interlocuteur', 'Rien à bloquer pour le moment.');
-      return;
-    }
-    client.send(C2S.blockCreate, {});
-    pushToast('success', 'Utilisateur bloqué', 'Vous ne serez plus mis en relation avec cette personne.');
-  }, [pushToast]);
+  const blockPeer = useCallback(
+    (targetId?: string) => {
+      const client = signalingRef.current;
+      if (!client?.isOpen || !sessionRef.current) {
+        pushToast('warn', 'Aucun interlocuteur', 'Rien à bloquer pour le moment.');
+        return;
+      }
+      client.send(C2S.blockCreate, targetId ? { target: targetId } : {});
+      pushToast('success', 'Utilisateur bloqué', 'Vous ne serez plus mis en relation avec cette personne.');
+    },
+    [pushToast],
+  );
 
   const submitReport = useCallback(
-    (category: string, reason: string, block: boolean) => {
+    (category: string, reason: string, block: boolean, targetId?: string) => {
       const client = signalingRef.current;
       if (!client?.isOpen || !sessionRef.current) {
         pushToast('warn', 'Signalement impossible', 'Aucune session active.');
         return;
       }
-      client.send(C2S.reportCreate, { category, reason, details: '', block });
+      client.send(
+        C2S.reportCreate,
+        targetId ? { category, reason, details: '', block, target: targetId } : { category, reason, details: '', block },
+      );
       pushToast('success', 'Signalement envoyé', 'Merci, notre équipe de modération va l’examiner.');
     },
     [pushToast],
   );
+
+  const addParticipant = useCallback(() => {
+    const client = signalingRef.current;
+    if (!client?.isOpen || !sessionRef.current) {
+      pushToast('warn', 'Aucune conférence', 'Rejoignez d’abord une conférence.');
+      return;
+    }
+    client.send(C2S.sessionAdd);
+  }, [pushToast]);
 
   const acceptConsent = useCallback(() => {
     try {
@@ -469,6 +562,8 @@ export function useRandomChat() {
   handlersRef.current = {
     onHello: (payload) => {
       setHello(payload);
+      myIdRef.current = payload.user_id;
+      setMyId(payload.user_id);
       iceServersRef.current = payload.ice_servers.map((server) => ({
         urls: server.urls,
         username: server.username,
@@ -477,7 +572,16 @@ export function useRandomChat() {
     },
 
     onQueueWaiting: () => {
-      applyStatus('waiting', 'Recherche d’un interlocuteur');
+      // Join already announced the right shape; only fill in when the server
+      // is the first to speak (requeue path).
+      if (statusRef.current !== 'waiting') {
+        applyStatus(
+          'waiting',
+          prefsRef.current.mode === 'group'
+            ? 'Recherche d’une conférence'
+            : 'Recherche d’un interlocuteur',
+        );
+      }
     },
 
     onQueueCanceled: () => {
@@ -491,32 +595,49 @@ export function useRandomChat() {
 
     onMatchFound: (payload) => {
       sessionRef.current = payload.session_id;
-      roleRef.current = payload.role;
       restartAttemptsRef.current = 0;
+      setSessionMode(payload.mode === 'group' ? 'group' : 'solo');
+      setSessionMax(payload.max_participants ?? 0);
+      const others = (payload.peers ?? []).filter((id) => id !== myIdRef.current);
+      setMembers(payload.peers ?? []);
+      setRemotePeers(others.map((id) => ({ id, stream: null })));
       // The auto-requeue path lands here with the previous "session ended"
       // notice still in the list; a fresh session starts with a clean chat.
       setMessages([]);
       setUnread(0);
       applyStatus('connecting', 'Négociation de la connexion');
-      const peer = ensurePeer();
-      void (async () => {
-        try {
-          if (payload.role === 'offerer') {
+      // One SDP offer per pair, no coordination round trip: the longest
+      // waiter offers in solo mode (server role), while conference members
+      // compare identifiers and the smaller one offers.
+      const offerTo = (peerId: string) => {
+        const peer = ensurePeerConnection(peerId);
+        void (async () => {
+          try {
             const offer = await peer.createOffer();
-            signalingRef.current?.send(C2S.rtcOffer, offer);
+            signalingRef.current?.send(C2S.rtcOffer, { ...offer, to: peerId });
+          } catch (err) {
+            pushToast('error', 'Négociation impossible', describeMediaError(err));
           }
-        } catch (err) {
-          pushToast('error', 'Négociation impossible', describeMediaError(err));
+        })();
+      };
+      if (payload.role === 'offerer' && payload.peer_id) {
+        offerTo(payload.peer_id);
+      } else if (payload.role !== 'answerer') {
+        for (const peerId of others) {
+          if (myIdRef.current < peerId) offerTo(peerId);
         }
-      })();
+      }
+      for (const peerId of others) ensurePeerConnection(peerId);
     },
 
     onOffer: (sdp) => {
-      const peer = rtcRef.current ?? ensurePeer();
+      const from = sdp.from;
+      if (!from) return;
+      const peer = ensurePeerConnection(from);
       void (async () => {
         try {
           const answer = await peer.acceptOffer(sdp);
-          signalingRef.current?.send(C2S.rtcAnswer, answer);
+          signalingRef.current?.send(C2S.rtcAnswer, { ...answer, to: from });
         } catch (err) {
           pushToast('error', 'Négociation impossible', describeMediaError(err));
         }
@@ -524,11 +645,31 @@ export function useRandomChat() {
     },
 
     onAnswer: (sdp) => {
-      void rtcRef.current?.acceptAnswer(sdp);
+      const peer = sdp.from ? peersRef.current.get(sdp.from) : undefined;
+      void peer?.acceptAnswer(sdp);
     },
 
     onIce: (candidate) => {
-      void rtcRef.current?.addIceCandidate(candidate);
+      const peer = candidate.from ? peersRef.current.get(candidate.from) : undefined;
+      void peer?.addIceCandidate(candidate);
+    },
+
+    onPeerJoined: (payload) => {
+      setMembers((previous) =>
+        previous.includes(payload.peer_id) ? previous : [...previous, payload.peer_id],
+      );
+      // The newcomer offers to everyone: the room only waits for the offer.
+      ensurePeerConnection(payload.peer_id);
+      pushSystemMessage('Un participant a rejoint la conférence.');
+    },
+
+    onPeerLeft: (payload) => {
+      dropPeerConnection(payload.peer_id);
+      pushSystemMessage(
+        payload.members > 1
+          ? `Un participant est parti (${payload.members} restants).`
+          : 'Un participant est parti, vous êtes seul.',
+      );
     },
 
     onChatMessage: (payload) => {
@@ -559,7 +700,7 @@ export function useRandomChat() {
     },
 
     onSessionEnded: (payload) => {
-      teardownPeer();
+      teardownAllPeers();
       pushSystemMessage(describeSessionEnd(payload.reason));
 
       if (payload.reason === 'reported' || payload.reason === 'blocked') {
@@ -589,15 +730,24 @@ export function useRandomChat() {
         applyStatus('error', payload.message);
         return;
       }
+      if (payload.code === 'empty_queue') {
+        pushToast('info', 'Personne en attente', 'Aucun interlocuteur disponible pour le moment.');
+        return;
+      }
+      if (payload.code === 'solo_session' || payload.code === 'session_full') {
+        pushToast('warn', 'Ajout impossible', payload.message);
+        return;
+      }
       if (payload.code === 'no_peer' || payload.code === 'not_waiting' || payload.code === 'no_session') {
         return;
       }
       pushToast('error', 'Erreur de protocole', payload.message);
     },
 
-    onConnectionState: (state) => {
+    onConnectionState: (state, peerId) => {
       if (state === 'connected') {
         restartAttemptsRef.current = 0;
+        connectedRef.current.add(peerId);
         applyStatus('connected');
         startSessionClocks();
         return;
@@ -607,19 +757,31 @@ export function useRandomChat() {
         return;
       }
       if (state === 'disconnected') {
-        applyStatus('reconnecting', 'Connexion instable, reprise en cours');
+        connectedRef.current.delete(peerId);
+        // A conference survives one peer dropping; only the last link down
+        // reads as a reconnection.
+        if (connectedRef.current.size === 0) {
+          applyStatus('reconnecting', 'Connexion instable, reprise en cours');
+        }
         return;
       }
       if (state === 'failed') {
-        handlersRef.current.onIceFailed();
+        handlersRef.current.onIceFailed(peerId);
       }
     },
 
-    onIceFailed: () => {
-      if (restartAttemptsRef.current < 1 && rtcRef.current) {
+    onIceFailed: (peerId) => {
+      const peer = peersRef.current.get(peerId);
+      if (peersRef.current.size > 1) {
+        // One mesh link died while others live: drop the tile, keep the call.
+        dropPeerConnection(peerId);
+        pushToast('warn', 'Participant perdu', 'La connexion avec un participant a été coupée.');
+        return;
+      }
+      if (restartAttemptsRef.current < 1 && peer) {
         restartAttemptsRef.current += 1;
         applyStatus('reconnecting', 'Tentative de reprise de la connexion');
-        rtcRef.current.restartIce();
+        peer.restartIce();
         return;
       }
       pushToast('warn', 'Connexion impossible', 'Réseau trop restrictif : recherche d’un nouvel interlocuteur.');
@@ -630,10 +792,10 @@ export function useRandomChat() {
     },
 
     sampleQuality: async () => {
-      const peer = rtcRef.current;
-      if (!peer) return;
+      const first = peersRef.current.values().next();
+      if (first.done) return;
       try {
-        setQuality(await peer.sample());
+        setQuality(await first.value.sample());
       } catch {
         // Sampling failures are not actionable for the user.
       }
@@ -644,7 +806,7 @@ export function useRandomChat() {
       if (client?.wasClosedByUs || event.code === 1000) return;
       const active = statusRef.current;
       if (active === 'idle' || active === 'error') return;
-      teardownPeer();
+      teardownAllPeers();
       signalingRef.current = null;
 
       // Distinguish "we lost the server" from "the server never let us in",
@@ -701,8 +863,8 @@ export function useRandomChat() {
   useEffect(() => {
     const release = () => {
       clearTimers();
-      rtcRef.current?.close();
-      rtcRef.current = null;
+      for (const peer of peersRef.current.values()) peer.close();
+      peersRef.current.clear();
       localStreamRef.current?.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
       signalingRef.current?.close(1000, 'page_hidden');
@@ -721,7 +883,13 @@ export function useRandomChat() {
     hello,
     publicStats,
     localStream,
-    remoteStream,
+    remotePeers,
+    myId,
+    members,
+    sessionMode,
+    sessionMax,
+    searchMode,
+    searchMax,
     messages,
     micEnabled,
     camEnabled,
@@ -743,6 +911,7 @@ export function useRandomChat() {
     switchCamera,
     switchMicrophone,
     sendMessage,
+    addParticipant,
     submitReport,
     blockPeer,
     acceptConsent,
@@ -761,14 +930,16 @@ interface Handlers {
   onOffer(sdp: SDPPayload): void;
   onAnswer(sdp: SDPPayload): void;
   onIce(candidate: ICEPayload): void;
+  onPeerJoined(payload: PeerJoined): void;
+  onPeerLeft(payload: PeerLeft): void;
   onChatMessage(payload: IncomingChatMessage): void;
   onChatAck(): void;
   onReportAck(): void;
   onBlockAck(): void;
   onSessionEnded(payload: SessionEnded): void;
   onError(payload: ServerErrorPayload): void;
-  onConnectionState(state: RTCPeerConnectionState): void;
-  onIceFailed(): void;
+  onConnectionState(state: RTCPeerConnectionState, peerId: string): void;
+  onIceFailed(peerId: string): void;
   sampleQuality(): Promise<void>;
   onClose(event: CloseEvent): void;
 }

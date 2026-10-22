@@ -12,7 +12,9 @@ import (
 
 // ProtocolVersion identifies the WebSocket event protocol implemented by this build.
 // Clients negotiate against it during the handshake so a stale SPA can be detected.
-const ProtocolVersion = "1"
+// Version 2 adds conferences: member lists, peer join/leave and per-recipient
+// signaling on top of the 1:1 protocol.
+const ProtocolVersion = "2"
 
 // IceServer mirrors the subset of the RTCIceServer dictionary the browser accepts.
 type IceServer struct {

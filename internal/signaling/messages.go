@@ -21,6 +21,7 @@ const (
 	EvtQueueCancel  = "queue.cancel"
 	EvtSessionNext  = "session.next"
 	EvtSessionLeave = "session.leave"
+	EvtSessionAdd   = "session.add"
 	EvtRTCOffer     = "rtc.offer"
 	EvtRTCAnswer    = "rtc.answer"
 	EvtRTCICE       = "rtc.ice"
@@ -38,6 +39,8 @@ const (
 	EvtQueueTimeout  = "queue.timeout"
 	EvtMatchFound    = "match.found"
 	EvtSessionEnded  = "session.ended"
+	EvtPeerJoined    = "peer.joined"
+	EvtPeerLeft      = "peer.left"
 	EvtChatMessage   = "chat.message"
 	EvtChatAck       = "chat.ack"
 	EvtReportAck     = "report.ack"
@@ -50,6 +53,7 @@ var clientEvents = map[string]struct{}{
 	EvtQueueCancel:  {},
 	EvtSessionNext:  {},
 	EvtSessionLeave: {},
+	EvtSessionAdd:   {},
 	EvtRTCOffer:     {},
 	EvtRTCAnswer:    {},
 	EvtRTCICE:       {},
@@ -125,10 +129,33 @@ type ErrorPayload struct {
 	Event   string `json:"event,omitempty"`
 }
 
+// QueueJoinPayload is the call shape requested at queue.join time.
+// Mode is "solo" (strict 1:1) or "group" (conference). MaxParticipants caps
+// the conference the caller joins; 0 means the caller sets no constraint.
+type QueueJoinPayload struct {
+	Mode            string `json:"mode,omitempty"`
+	MaxParticipants int    `json:"max_participants,omitempty"`
+}
+
 // QueuePayload is sent while the user waits for a partner.
 type QueuePayload struct {
 	Position int    `json:"position"`
 	Since    string `json:"since"`
+}
+
+// PeerJoinedPayload announces a late joiner to the existing members.
+// The newcomer offers to each of them; they only wait for those offers.
+type PeerJoinedPayload struct {
+	SessionID string `json:"session_id"`
+	PeerID    string `json:"peer_id"`
+}
+
+// PeerLeftPayload tells the survivors who left and how many remain.
+type PeerLeftPayload struct {
+	SessionID string `json:"session_id"`
+	PeerID    string `json:"peer_id"`
+	Reason    string `json:"reason"`
+	Members   int    `json:"members"`
 }
 
 // TimeoutPayload is sent when no partner was found in time.
@@ -153,17 +180,23 @@ type StatePayload struct {
 }
 
 // SDPPayload carries one side of the WebRTC negotiation.
+// To selects the recipient inside a conference (optional for 1:1 calls);
+// the server stamps From before relaying so receivers know who offered.
 type SDPPayload struct {
 	Type string `json:"type"`
 	SDP  string `json:"sdp"`
+	To   string `json:"to,omitempty"`
+	From string `json:"from,omitempty"`
 }
 
-// ICEPayload carries a single ICE candidate.
+// ICEPayload carries a single ICE candidate, routed like SDP.
 type ICEPayload struct {
 	Candidate        string  `json:"candidate"`
 	SDPMid           *string `json:"sdpMid,omitempty"`
 	SDPMLineIndex    *int    `json:"sdpMLineIndex,omitempty"`
 	UsernameFragment *string `json:"usernameFragment,omitempty"`
+	To               string  `json:"to,omitempty"`
+	From             string  `json:"from,omitempty"`
 }
 
 // ChatSendPayload is the text a client wants to deliver.
@@ -185,12 +218,19 @@ type ChatAckPayload struct {
 	At string `json:"at"`
 }
 
-// ReportPayload is a moderation signal.
+// ReportPayload is a moderation signal. Target selects the reported member
+// inside a conference; it defaults to the other participant of a 1:1 call.
 type ReportPayload struct {
 	Category string `json:"category"`
 	Reason   string `json:"reason"`
 	Details  string `json:"details"`
 	Block    bool   `json:"block"`
+	Target   string `json:"target,omitempty"`
+}
+
+// BlockPayload selects the blocked member; same default as reports.
+type BlockPayload struct {
+	Target string `json:"target,omitempty"`
 }
 
 // ReportAckPayload confirms the report was recorded.

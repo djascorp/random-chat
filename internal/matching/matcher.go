@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"random-chat/internal/sessions"
+	"random-chat/internal/storage"
 )
 
 // BlockChecker reports whether two users must never be paired.
@@ -14,11 +15,10 @@ type BlockChecker interface {
 	IsBlocked(a, b string) bool
 }
 
-// Match describes a pairing that was just created.
+// Match describes a call that was just created.
 type Match struct {
 	SessionID string
-	Offerer   string
-	Answerer  string
+	Members   []string
 	WaitTime  time.Duration
 }
 
@@ -47,6 +47,9 @@ type Matcher struct {
 	mu       sync.Mutex
 	queue    *Queue
 	enqueued map[string]time.Time
+	// live tracks every peer currently bound to a session so late joiners can
+	// be announced to members that left the queue long ago.
+	live     map[string]Peer
 	timeout  time.Duration
 	sessions *sessions.Manager
 	blocks   BlockChecker
@@ -60,12 +63,21 @@ func NewMatcher(opts Options) *Matcher {
 	return &Matcher{
 		queue:    NewQueue(),
 		enqueued: make(map[string]time.Time),
+		live:     make(map[string]Peer),
 		timeout:  opts.QueueTimeout,
 		sessions: opts.Sessions,
 		blocks:   opts.Blocks,
 		metrics:  opts.Metrics,
 		log:      opts.Logger,
 	}
+}
+
+// Forget drops a peer from the live registry. The hub calls it whenever a peer
+// leaves a session, cancels a search or disconnects.
+func (m *Matcher) Forget(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.live, id)
 }
 
 // OnMatch registers an observer invoked after a session is created.
@@ -99,6 +111,7 @@ func (m *Matcher) Join(p Peer) {
 func (m *Matcher) Cancel(p Peer) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	delete(m.live, p.ID())
 	return m.cancelLocked(p)
 }
 
@@ -126,11 +139,82 @@ func (m *Matcher) Waiting() (int, []string) {
 	return len(ids), ids
 }
 
-// pairLocked keeps matching until no compatible pair remains. Called with the
-// matcher mutex held.
+// pairLocked pairs solo callers 1:1, then forms new conferences from the
+// group waiters. Live rooms never absorb waiters on their own: late joiners
+// enter through an explicit session.add (the Ajouter button), so nobody lands
+// mid-conversation without the room's consent. Called with the mutex held.
 func (m *Matcher) pairLocked() {
+	m.pairSoloLocked()
+	m.formGroupsLocked()
+}
+
+// Fill pulls one waiting group peer into the given conference. It reports
+// whether anyone was available; the hub maps a miss to an "empty queue" error
+// for the Ajouter button.
+func (m *Matcher) Fill(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions.Get(sessionID)
+	if !ok || s.Mode != groupMode || s.Full() {
+		return false
+	}
+	members := s.Members()
+	for _, p := range m.queue.Snapshot() {
+		if p.Mode() != groupMode || p.State() != StateWaiting {
+			continue
+		}
+		if !s.Fits(1, p.MaxParticipants()) || m.blockedWithAny(p, members) {
+			continue
+		}
+		m.joinSessionLocked(s.ID, p)
+		return true
+	}
+	return false
+}
+
+// joinSessionLocked moves a waiter into a live session and notifies everyone:
+// the newcomer gets the full member list so it can offer to each of them, and
+// every existing member learns who arrived so it waits for that offer.
+func (m *Matcher) joinSessionLocked(sessionID string, p Peer) {
+	m.queue.Remove(p.ID())
+	s, added := m.sessions.AddMember(sessionID, p.ID())
+	if !added {
+		return
+	}
+	p.Bind("", s.ID)
+	p.SetState(StateInCall)
+	m.live[p.ID()] = p
+
+	wait := m.takeWait(p)
+	members := s.Members()
+	p.Send("match.found", matchFoundPayload(s, members, "", "", time.Now()))
+	for _, id := range members {
+		if id == p.ID() {
+			continue
+		}
+		if q := m.live[id]; q != nil {
+			q.Send("peer.joined", peerJoinedPayload(s.ID, p.ID()))
+		}
+	}
+
+	if m.metrics != nil {
+		m.metrics.MatchCreated()
+		m.metrics.MatchWait(wait)
+	}
+	if m.log != nil {
+		m.log.Info("peer joined session",
+			"session_id", s.ID, "peer", p.ID(), "members", len(members))
+	}
+}
+
+// pairSoloLocked keeps pairing solo callers 1:1 until no compatible pair
+// remains. Group callers never enter this path.
+func (m *Matcher) pairSoloLocked() {
 	for {
 		a, b, ok := m.queue.PopPair(func(x, y Peer) bool {
+			if x.Mode() != soloMode || y.Mode() != soloMode {
+				return false
+			}
 			if m.blocks != nil && m.blocks.IsBlocked(x.ID(), y.ID()) {
 				return false
 			}
@@ -139,68 +223,190 @@ func (m *Matcher) pairLocked() {
 		if !ok {
 			return
 		}
-		m.startSessionLocked(a, b)
+		m.startSessionLocked([]Peer{a, b}, soloMode, 2)
 	}
 }
 
-func (m *Matcher) startSessionLocked(a, b Peer) {
+// formGroupsLocked gathers waiting group callers into new conferences.
+// The oldest waiter opens the room; followers join while they fit both the
+// room's cap and their own limit, so a max=3 caller never lands in a room of 5.
+func (m *Matcher) formGroupsLocked() {
+	waiters := m.groupWaiters()
+	taken := map[string]struct{}{}
+	for _, first := range waiters {
+		if _, done := taken[first.ID()]; done {
+			continue
+		}
+		group := []Peer{first}
+		cap := first.MaxParticipants()
+		for _, w := range waiters {
+			if w.ID() == first.ID() {
+				continue
+			}
+			if _, done := taken[w.ID()]; done {
+				continue
+			}
+			if cap > 0 && len(group)+1 > cap {
+				continue
+			}
+			if w.MaxParticipants() > 0 && len(group)+1 > w.MaxParticipants() {
+				continue
+			}
+			if m.blockedWithMembers(w, group) {
+				continue
+			}
+			group = append(group, w)
+			if w.MaxParticipants() > 0 && (cap == 0 || w.MaxParticipants() < cap) {
+				cap = w.MaxParticipants()
+			}
+		}
+		if len(group) < 2 {
+			continue
+		}
+		for _, p := range group {
+			taken[p.ID()] = struct{}{}
+		}
+		m.startSessionLocked(group, groupMode, cap)
+	}
+}
+
+// groupWaiters returns the waiting group callers oldest first.
+func (m *Matcher) groupWaiters() []Peer {
+	var out []Peer
+	for _, p := range m.queue.Snapshot() {
+		if p.Mode() == groupMode && p.State() == StateWaiting {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (m *Matcher) startSessionLocked(members []Peer, mode string, max int) {
 	now := time.Now()
 
-	waitA := now.Sub(m.enqueued[a.ID()])
-	waitB := now.Sub(m.enqueued[b.ID()])
-	delete(m.enqueued, a.ID())
-	delete(m.enqueued, b.ID())
+	var longest time.Duration
+	ids := make([]string, 0, len(members))
+	for _, p := range members {
+		m.queue.Remove(p.ID())
+		ids = append(ids, p.ID())
+		if wait := m.takeWait(p); wait > longest {
+			longest = wait
+		}
+	}
 
-	session := m.sessions.Create(a.ID(), b.ID())
+	session := m.sessions.Create(ids, mode, max)
 
-	// The peer that waited longest becomes the offerer so the SDP exchange has a
-	// deterministic direction without an extra round trip.
-	a.Bind(b.ID(), session.ID)
-	b.Bind(a.ID(), session.ID)
-
-	a.Send("match.found", matchPayload(session.ID, b.ID(), "offerer", now))
-	b.Send("match.found", matchPayload(session.ID, a.ID(), "answerer", now))
+	// Solo pairs keep the historic direction: the longest waiter offers.
+	// Conferences resolve direction client-side by identifier order, so every
+	// pair still negotiates exactly once without server coordination.
+	if mode == soloMode {
+		members[0].Bind(members[1].ID(), session.ID)
+		members[1].Bind(members[0].ID(), session.ID)
+		members[0].Send("match.found", matchFoundPayload(session, ids, members[1].ID(), "offerer", now))
+		members[1].Send("match.found", matchFoundPayload(session, ids, members[0].ID(), "answerer", now))
+	} else {
+		for _, p := range members {
+			p.Bind("", session.ID)
+		}
+		payload := matchFoundPayload(session, ids, "", "", now)
+		for _, p := range members {
+			p.Send("match.found", payload)
+		}
+	}
+	for _, p := range members {
+		m.live[p.ID()] = p
+	}
 
 	if m.metrics != nil {
 		m.metrics.MatchCreated()
-		if waitB > waitA {
-			m.metrics.MatchWait(waitB)
-		} else {
-			m.metrics.MatchWait(waitA)
-		}
+		m.metrics.MatchWait(longest)
 	}
 	if m.log != nil {
 		m.log.Info("session created",
 			"session_id", session.ID,
-			"offerer", a.ID(),
-			"answerer", b.ID(),
-			"wait_offerer_ms", waitA.Milliseconds(),
-			"wait_answerer_ms", waitB.Milliseconds())
+			"mode", mode,
+			"members", len(ids),
+			"wait_longest_ms", longest.Milliseconds())
 	}
 	if m.onMatch != nil {
 		m.onMatch(Match{
 			SessionID: session.ID,
-			Offerer:   a.ID(),
-			Answerer:  b.ID(),
-			WaitTime:  waitA,
+			Members:   ids,
+			WaitTime:  longest,
 		})
 	}
 }
 
-type matchPayloadData struct {
-	SessionID string `json:"session_id"`
-	PeerID    string `json:"peer_id"`
-	Role      string `json:"role"`
-	StartedAt string `json:"started_at"`
+// takeWait removes a waiter from the enqueue ledger and returns its wait.
+func (m *Matcher) takeWait(p Peer) time.Duration {
+	since, ok := m.enqueued[p.ID()]
+	delete(m.enqueued, p.ID())
+	if !ok {
+		return 0
+	}
+	return time.Since(since)
 }
 
-func matchPayload(sessionID, peerID, role string, at time.Time) matchPayloadData {
-	return matchPayloadData{
-		SessionID: sessionID,
-		PeerID:    peerID,
-		Role:      role,
-		StartedAt: at.UTC().Format(time.RFC3339Nano),
+// livePeer returns the bound peer with this id, if any.
+func (m *Matcher) livePeer(id string) Peer {
+	return m.live[id]
+}
+
+// blockedWithAny reports whether p must never be paired with any member.
+func (m *Matcher) blockedWithAny(p Peer, members []string) bool {
+	if m.blocks == nil {
+		return false
 	}
+	for _, id := range members {
+		if id != p.ID() && m.blocks.IsBlocked(p.ID(), id) {
+			return true
+		}
+	}
+	return false
+}
+
+// blockedWithMembers reports whether w is blocked with anyone in the group.
+func (m *Matcher) blockedWithMembers(w Peer, group []Peer) bool {
+	if m.blocks == nil {
+		return false
+	}
+	for _, p := range group {
+		if m.blocks.IsBlocked(w.ID(), p.ID()) {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	soloMode  = "solo"
+	groupMode = "group"
+)
+
+type matchPayloadData struct {
+	SessionID       string   `json:"session_id"`
+	Peers           []string `json:"peers"`
+	Mode            string   `json:"mode"`
+	MaxParticipants int      `json:"max_participants"`
+	PeerID          string   `json:"peer_id,omitempty"`
+	Role            string   `json:"role,omitempty"`
+	StartedAt       string   `json:"started_at"`
+}
+
+func matchFoundPayload(s *storage.Session, peers []string, peerID, role string, at time.Time) matchPayloadData {
+	return matchPayloadData{
+		SessionID:       s.ID,
+		Peers:           peers,
+		Mode:            s.Mode,
+		MaxParticipants: s.MaxParticipants,
+		PeerID:          peerID,
+		Role:            role,
+		StartedAt:       at.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+func peerJoinedPayload(sessionID, peerID string) map[string]any {
+	return map[string]any{"session_id": sessionID, "peer_id": peerID}
 }
 
 // Run sweeps the queue for peers that waited longer than the timeout, until ctx

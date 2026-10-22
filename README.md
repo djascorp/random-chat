@@ -20,6 +20,7 @@ architecture designed to grow (multi-instance, SFU) without a rewrite.
 | Per-user and per-IP rate limiting | ✅ |
 | Metrics (`/metrics`, `/api/stats`) and audit log | ✅ |
 | Token-protected admin API | ✅ |
+| Group conferences (Solo/Group search, member cap, Ajouter button, mesh) | ✅ |
 | PostgreSQL persistence with in-memory fallback | ✅ |
 | Responsive UI with dark theme, mobile included | ✅ |
 | Unit tests, WebSocket integration tests, `-race` | ✅ |
@@ -38,7 +39,9 @@ Browser A  ⇄  Go server (signaling, matching, moderation)  ⇄  Browser B
 ```
 
 - **The server never sees video.** It exchanges SDP offers/answers and ICE
-  candidates, picks peers, enforces rules, and closes sessions.
+  candidates, picks peers, enforces rules, and closes sessions. Solo calls are
+  1:1; conferences are a full mesh (one `RTCPeerConnection` per pair, offers
+  resolved by identifier order), still relayed by TURN only when needed.
 - **Matching lives in memory**, serialized by a single lock: this guarantees a
   user can only belong to one session, even when two clicks arrive at the
   same instant.
@@ -154,15 +157,16 @@ Every frame is a JSON envelope: `{ "event": "...", "data": { ... } }`.
 
 | Event | Role |
 | --- | --- |
-| `queue.join` | Request a match |
+| `queue.join` | Request a match (`{ mode: "solo" \| "group", max_participants }`, 0 = no cap) |
 | `queue.cancel` | Cancel the search |
 | `session.next` | Close the session and search again |
 | `session.leave` | Close the session without searching |
-| `rtc.offer` / `rtc.answer` | Forward an SDP description to the peer only |
-| `rtc.ice` | Forward an ICE candidate to the peer only |
-| `chat.send` | Send a text message |
-| `report.create` | Report (and optionally block) the peer |
-| `block.create` | Block the peer |
+| `session.add` | Pull one waiting peer into your conference (group only) |
+| `rtc.offer` / `rtc.answer` | Forward an SDP description (`to` selects the recipient in a conference) |
+| `rtc.ice` | Forward an ICE candidate (`to` selects the recipient in a conference) |
+| `chat.send` | Send a text message (broadcast to every other member) |
+| `report.create` | Report (and optionally block) a member (`target`, defaults to the peer in 1:1) |
+| `block.create` | Block a member (`target`, defaults to the peer in 1:1) |
 
 ### Server → client
 
@@ -170,7 +174,8 @@ Every frame is a JSON envelope: `{ "event": "...", "data": { ... } }`.
 | --- | --- |
 | `server.hello` | Client id, protocol version, ICE servers, limits |
 | `queue.waiting` / `queue.canceled` / `queue.timeout` | Queue state |
-| `match.found` | Session created, with the role (`offerer` / `answerer`) |
+| `match.found` | Session created, with `peers[]`, `mode`, `max_participants` (plus `role` in 1:1) |
+| `peer.joined` / `peer.left` | Conference roster changes |
 | `session.ended` | Session end with the reason |
 | `session.state` | Current state (`idle`, `waiting`, …) |
 | `chat.message` / `chat.ack` | Message received / send acknowledgement |
@@ -180,8 +185,9 @@ Every frame is a JSON envelope: `{ "event": "...", "data": { ... } }`.
 ### Rules enforced server-side
 
 1. Only listed events are accepted; everything else is explicitly rejected.
-2. Signaling is relayed only when sender and recipient are the **same pair of
-   the same active session**. A client can never reach another session.
+2. Signaling is relayed only inside the sender's own session: to the single
+   peer in 1:1, or to the member named by `to` in a conference. Chat is
+   broadcast to every other member. A client can never reach another session.
 3. Bounded sizes: envelope (64 KB by default), SDP (100 KB), ICE candidate
    (2 KB), chat message (1000 characters), report (500 + 2000 characters).
 4. `rtc.offer` must carry `type: "offer"` and `rtc.answer` `type: "answer"`:

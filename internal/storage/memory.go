@@ -135,8 +135,28 @@ func (m *Memory) SuspendUser(_ context.Context, id string, until time.Time, reas
 func (m *Memory) CreateSession(_ context.Context, s *Session) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sessions[s.ID] = *s
+	stored := *s
+	stored.Participants = append([]string(nil), s.Participants...)
+	m.sessions[s.ID] = stored
 	m.trimSessionsLocked()
+	return nil
+}
+
+// AddSessionParticipant records a late joiner of a conference.
+func (m *Memory) AddSessionParticipant(_ context.Context, sessionID, peerID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return ErrNotFound
+	}
+	for _, p := range s.Participants {
+		if p == peerID {
+			return nil
+		}
+	}
+	s.Participants = append(s.Participants, peerID)
+	m.sessions[sessionID] = s
 	return nil
 }
 

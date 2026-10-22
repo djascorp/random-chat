@@ -96,9 +96,26 @@ func (p *Postgres) SuspendUser(ctx context.Context, id string, until time.Time, 
 
 func (p *Postgres) CreateSession(ctx context.Context, s *Session) error {
 	_, err := p.db.ExecContext(ctx, `
-		INSERT INTO sessions (id, participant_a, participant_b, started_at, status)
+		INSERT INTO sessions (id, started_at, status, mode, max_participants)
 		VALUES ($1, $2, $3, $4, $5)`,
-		s.ID, s.ParticipantA, s.ParticipantB, s.StartedAt, string(s.Status))
+		s.ID, s.StartedAt, string(s.Status), s.Mode, s.MaxParticipants)
+	if err != nil {
+		return err
+	}
+	for _, peerID := range s.Participants {
+		if err := p.AddSessionParticipant(ctx, s.ID, peerID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AddSessionParticipant records a late joiner of a conference.
+func (p *Postgres) AddSessionParticipant(ctx context.Context, sessionID, peerID string) error {
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO session_participants (session_id, peer_id) VALUES ($1, $2)
+		ON CONFLICT DO NOTHING`,
+		sessionID, peerID)
 	return err
 }
 

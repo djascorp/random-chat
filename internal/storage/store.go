@@ -15,6 +15,7 @@ type Store interface {
 	SuspendUser(ctx context.Context, id string, until time.Time, reason string) error
 
 	CreateSession(ctx context.Context, s *Session) error
+	AddSessionParticipant(ctx context.Context, sessionID, peerID string) error
 	EndSession(ctx context.Context, id string, at time.Time, status SessionStatus, reason string) error
 
 	CreateReport(ctx context.Context, r *Report) error

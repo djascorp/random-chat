@@ -53,8 +53,8 @@ func TestMemoryStoreBoundsSessions(t *testing.T) {
 	for i := 0; i < total; i++ {
 		session := &Session{
 			ID:           fmt.Sprintf("session-%05d", i),
-			ParticipantA: "peer-a",
-			ParticipantB: "peer-b",
+			Participants: []string{"peer-a", "peer-b"},
+			Mode:         SessionSolo,
 			StartedAt:    now.Add(time.Duration(i) * time.Millisecond),
 			Status:       SessionActive,
 		}
@@ -94,8 +94,8 @@ func TestMemoryStoreNeverEvictsLiveSessions(t *testing.T) {
 	for i := 0; i < total; i++ {
 		session := &Session{
 			ID:           fmt.Sprintf("live-%05d", i),
-			ParticipantA: "peer-a",
-			ParticipantB: "peer-b",
+			Participants: []string{"peer-a", "peer-b"},
+			Mode:         SessionSolo,
 			StartedAt:    now,
 			Status:       SessionActive,
 		}

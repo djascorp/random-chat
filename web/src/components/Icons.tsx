@@ -230,6 +230,18 @@ export const DotsIcon = ({ size = 20, className }: IconProps) =>
     </>,
   );
 
+export const UserPlusIcon = ({ size = 20, className }: IconProps) =>
+  base(
+    size,
+    className,
+    <>
+      <circle cx="9" cy="8.5" r="3.5" />
+      <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
+      <path d="M18.5 8v6" />
+      <path d="M15.5 11h6" />
+    </>,
+  );
+
 export const SparkIcon = ({ size = 20, className }: IconProps) =>
   base(
     size,

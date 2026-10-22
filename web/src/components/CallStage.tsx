@@ -1,50 +1,64 @@
-import type { CallStatus, PeerStats } from '../types';
+import type { CallStatus, PeerStats, SessionMode } from '../types';
+import type { RemotePeer } from '../hooks/useRandomChat';
 import { VideoSurface } from './VideoSurface';
-import { AlertIcon, MicOffIcon, UsersIcon, VideoOffIcon } from './Icons';
+import { AlertIcon, BlockIcon, FlagIcon, MicOffIcon, UsersIcon, VideoOffIcon } from './Icons';
 import { describeConnection } from '../lib/webrtc';
 import { formatDuration } from '../lib/format';
 
 interface CallStageProps {
   status: CallStatus;
   statusDetail: string;
-  remoteStream: MediaStream | null;
+  remotePeers: RemotePeer[];
   localStream: MediaStream | null;
   camEnabled: boolean;
   micEnabled: boolean;
   sessionSeconds: number;
   quality: PeerStats | null;
+  sessionMode: SessionMode;
+  sessionMax: number;
+  membersCount: number;
   error: string | null;
   onRetry: () => void;
   onBack: () => void;
+  onReportPeer: (peerId: string) => void;
+  onBlockPeer: (peerId: string) => void;
 }
 
-// 'ended' only ever shows while the automatic requeue is already running, so it
-// reads as a search rather than a negotiation.
 const SEARCHING: CallStatus[] = ['waiting', 'ended'];
 const NEGOTIATING: CallStatus[] = ['connecting', 'reconnecting'];
 
 export function CallStage({
   status,
   statusDetail,
-  remoteStream,
+  remotePeers,
   localStream,
   camEnabled,
   micEnabled,
   sessionSeconds,
   quality,
+  sessionMode,
+  sessionMax,
+  membersCount,
   error,
   onRetry,
   onBack,
+  onReportPeer,
+  onBlockPeer,
 }: CallStageProps) {
   const connection = describeConnection(quality);
-  const remoteActive = status === 'connected' || status === 'reconnecting';
+  const inCall = status === 'connected' || status === 'reconnecting';
   const showLocal = Boolean(localStream);
   const requestingMedia = status === 'requesting-media';
+  const isGroup = sessionMode === 'group';
+  // Alone in a conference: the call lives, the room waits for Ajouter.
+  const lone = isGroup && inCall && remotePeers.length === 0;
   const scrimTitle = requestingMedia
     ? 'Activation de la caméra…'
-    : SEARCHING.includes(status)
-      ? 'Recherche d’un interlocuteur…'
-      : 'Connexion en cours…';
+    : lone
+      ? 'En attente de participants…'
+      : SEARCHING.includes(status)
+        ? 'Recherche d’un interlocuteur…'
+        : 'Connexion en cours…';
   const qualityHint =
     quality?.candidateType === 'relay'
       ? 'Appel relayé via TURN : la qualité peut être réduite sur ce réseau'
@@ -74,16 +88,60 @@ export function CallStage({
     );
   }
 
+  const showGrid = isGroup && remotePeers.length > 0;
+
   return (
     <div className="stage">
-      <div className={`stage__remote ${remoteActive ? 'is-live' : ''}`}>
-        <VideoSurface
-          stream={remoteActive ? remoteStream : null}
-          className="stage__video"
-          label="Flux vidéo de votre interlocuteur"
-        />
+      <div className={`stage__remote ${inCall ? 'is-live' : ''}`}>
+        {showGrid ? (
+          <div className="stage__videos" role="group" aria-label="Participants de la conférence">
+            {remotePeers.map((peer, index) => (
+              <div className="tile" key={peer.id}>
+                {peer.stream ? (
+                  <VideoSurface
+                    stream={peer.stream}
+                    className="tile__video"
+                    label={`Participant ${index + 2}`}
+                  />
+                ) : (
+                  <div className="tile__waiting">
+                    <UsersIcon size={22} />
+                    <span>Connexion…</span>
+                  </div>
+                )}
+                <span className="tile__label">Participant {index + 2}</span>
+                <span className="tile__actions">
+                  <button
+                    type="button"
+                    className="tile__btn"
+                    onClick={() => onReportPeer(peer.id)}
+                    title={`Signaler le participant ${index + 2}`}
+                    aria-label={`Signaler le participant ${index + 2}`}
+                  >
+                    <FlagIcon size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="tile__btn tile__btn--danger"
+                    onClick={() => onBlockPeer(peer.id)}
+                    title={`Bloquer le participant ${index + 2}`}
+                    aria-label={`Bloquer le participant ${index + 2}`}
+                  >
+                    <BlockIcon size={15} />
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <VideoSurface
+            stream={inCall && !lone ? (remotePeers[0]?.stream ?? null) : null}
+            className="stage__video"
+            label="Flux vidéo de votre interlocuteur"
+          />
+        )}
 
-        {!remoteActive ? (
+        {!inCall || lone ? (
           <div className="stage__scrim">
             <div className="radar" aria-hidden="true">
               <span className="radar__ring" />
@@ -97,7 +155,9 @@ export function CallStage({
             <p className="stage__scrim-text">
               {requestingMedia
                 ? 'Autorisez l’accès dans votre navigateur : votre image apparaît ci-dessous avant la mise en relation.'
-                : statusDetail || 'Vous serez mis en relation dès qu’une personne sera disponible.'}
+                : lone
+                  ? 'Utilisez le bouton Ajouter pour faire entrer quelqu’un, ou attendez qu’on vous rejoigne.'
+                  : statusDetail || 'Vous serez mis en relation dès qu’une personne sera disponible.'}
             </p>
             {NEGOTIATING.includes(status) ? (
               <p className="stage__scrim-note">
@@ -107,7 +167,7 @@ export function CallStage({
           </div>
         ) : null}
 
-        {remoteActive && !remoteStream ? (
+        {inCall && !lone && !showGrid && !remotePeers[0]?.stream ? (
           <div className="stage__scrim stage__scrim--soft">
             <p className="stage__scrim-text">En attente du flux vidéo…</p>
           </div>
@@ -116,7 +176,6 @@ export function CallStage({
         {/* The HUD and the self view live inside the video frame so they stay
             anchored to it: the frame is capped in width on large screens, and
             positioning them against the stage pushed the self view outside it. */}
-        {/* Top shade so the pills stay readable over bright video. */}
         <div className="stage__hud-scrim" aria-hidden="true" />
         <div className="stage__hud">
           {status === 'reconnecting' ? (
@@ -125,10 +184,12 @@ export function CallStage({
               Reconnexion…
             </span>
           ) : (
-            <span className={`pill ${remoteActive ? 'pill--ok' : 'pill--busy'}`}>
-              <span className={`dot ${remoteActive ? 'dot--ok' : 'dot--pulse'}`} />
-              {remoteActive
-                ? 'En conversation'
+            <span className={`pill ${inCall ? 'pill--ok' : 'pill--busy'}`}>
+              <span className={`dot ${inCall ? 'dot--ok' : 'dot--pulse'}`} />
+              {inCall
+                ? isGroup
+                  ? 'En conférence'
+                  : 'En conversation'
                 : requestingMedia
                   ? 'Caméra'
                   : SEARCHING.includes(status)
@@ -136,11 +197,23 @@ export function CallStage({
                     : 'Connexion'}
             </span>
           )}
-          {remoteActive ? (
+          {inCall ? (
             <>
               <span className="pill pill--mono" title="Durée de la session en cours">
                 {formatDuration(sessionSeconds)}
               </span>
+              {isGroup ? (
+                <span
+                  className="pill pill--mono"
+                  title={
+                    sessionMax > 0
+                      ? `Conférence : ${membersCount} participant${membersCount > 1 ? 's' : ''} sur ${sessionMax} maximum`
+                      : `Conférence : ${membersCount} participant${membersCount > 1 ? 's' : ''}, sans limite`
+                  }
+                >
+                  {membersCount}{sessionMax > 0 ? `/${sessionMax}` : ''}
+                </span>
+              ) : null}
               <span className={`pill pill--${connection.tone}`} title={qualityHint}>
                 {connection.label}
               </span>
@@ -148,7 +221,8 @@ export function CallStage({
           ) : null}
           {quality?.bitrateKbps !== null &&
           quality?.bitrateKbps !== undefined &&
-          remoteActive ? (
+          inCall &&
+          !isGroup ? (
             <span className="pill pill--mono" title="Débit vidéo reçu">
               {quality.bitrateKbps} kbps
             </span>

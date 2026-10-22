@@ -159,7 +159,7 @@ func (h *Hub) unregister(c *Client) {
 
 	c.CloseWithReason("disconnected")
 	h.matcher.Cancel(c)
-	h.terminate(c, storage.SessionEnded, "peer_disconnected")
+	h.removeMember(c.SessionID(), c.id, "peer_disconnected", storage.SessionEnded, false)
 
 	h.metrics.ConnectionsClosed.Inc()
 	h.metrics.ConnectionsActive.Dec()
@@ -243,6 +243,8 @@ func (h *Hub) handle(c *Client, env Envelope) {
 		h.handleNext(c, env)
 	case EvtSessionLeave:
 		h.handleLeave(c, env)
+	case EvtSessionAdd:
+		h.handleAdd(c, env)
 	case EvtRTCOffer, EvtRTCAnswer:
 		h.handleSDP(c, env)
 	case EvtRTCICE:
@@ -269,14 +271,49 @@ func (h *Hub) handleQueueJoin(c *Client, env Envelope) {
 		c.SendError("suspended", "accès temporairement suspendu jusqu'à "+until.Format(time.RFC3339), env.Event)
 		return
 	}
+	payload, err := decodeData[QueueJoinPayload](env)
+	if err != nil {
+		h.metrics.MessagesRejected.Inc()
+		c.SendError("malformed", "recherche invalide", env.Event)
+		return
+	}
+	mode, max, ok := normalizeSearchPrefs(payload)
+	if !ok {
+		c.SendError("invalid_limit", "le nombre maximal doit valoir 0 (sans contrainte) ou au moins 2", env.Event)
+		return
+	}
+	c.SetSearchPrefs(mode, max)
 
 	if c.State() == matching.StateInCall {
-		h.terminate(c, storage.SessionEnded, "requeue")
+		h.removeMember(c.SessionID(), c.id, "requeue", storage.SessionEnded, false)
 	}
 	h.matcher.Join(c)
 	if c.State() == matching.StateWaiting {
 		c.Send(EvtQueueWaiting, QueuePayload{Position: h.matcher.Len(), Since: nowRFC3339()})
 	}
+}
+
+// normalizeSearchPrefs validates the requested call shape. Solo ignores the
+// cap; a group cap of 1 could never form a call, so it is rejected.
+func normalizeSearchPrefs(payload QueueJoinPayload) (string, int, bool) {
+	mode := strings.ToLower(strings.TrimSpace(payload.Mode))
+	if mode == "" {
+		mode = storage.SessionSolo
+	}
+	if mode != storage.SessionSolo && mode != storage.SessionGroup {
+		mode = storage.SessionSolo
+	}
+	max := payload.MaxParticipants
+	if max < 0 {
+		max = 0
+	}
+	if mode == storage.SessionSolo {
+		return mode, 0, true
+	}
+	if max == 1 {
+		return "", 0, false
+	}
+	return mode, max, true
 }
 
 func (h *Hub) handleQueueCancel(c *Client, env Envelope) {
@@ -295,7 +332,7 @@ func (h *Hub) handleNext(c *Client, env Envelope) {
 		return
 	}
 	if c.State() == matching.StateInCall {
-		h.terminate(c, storage.SessionEnded, "next")
+		h.removeMember(c.SessionID(), c.id, "next", storage.SessionEnded, false)
 	}
 	h.matcher.Join(c)
 	if c.State() == matching.StateWaiting {
@@ -306,9 +343,36 @@ func (h *Hub) handleNext(c *Client, env Envelope) {
 func (h *Hub) handleLeave(c *Client, _ Envelope) {
 	h.matcher.Cancel(c)
 	if c.State() == matching.StateInCall {
-		h.terminate(c, storage.SessionEnded, "left")
+		h.removeMember(c.SessionID(), c.id, "left", storage.SessionEnded, false)
 	}
 	c.Send(EvtStateChanged, StatePayload{State: string(matching.StateIdle)})
+}
+
+// handleAdd pulls one waiting peer into the caller's conference. This is the
+// Ajouter button: conferences grow on demand instead of forking new calls.
+func (h *Hub) handleAdd(c *Client, env Envelope) {
+	if !h.joinLimiter.Allow(c.id) {
+		h.penalize(c, env.Event)
+		c.SendError("rate_limited", "trop d'ajouts en peu de temps", env.Event)
+		return
+	}
+	sessionID := c.SessionID()
+	s, ok := h.sessions.Get(sessionID)
+	if !ok || !s.Has(c.id) {
+		c.SendError("no_session", "aucune conférence active", env.Event)
+		return
+	}
+	if s.Mode != storage.SessionGroup {
+		c.SendError("solo_session", "l'ajout n'est possible qu'en conférence", env.Event)
+		return
+	}
+	if s.Full() {
+		c.SendError("session_full", "la conférence est complète", env.Event)
+		return
+	}
+	if !h.matcher.Fill(sessionID) {
+		c.SendError("empty_queue", "personne en attente pour le moment", env.Event)
+	}
 }
 
 func (h *Hub) handleSDP(c *Client, env Envelope) {
@@ -317,7 +381,7 @@ func (h *Hub) handleSDP(c *Client, env Envelope) {
 		c.SendError("rate_limited", "signalisation trop fréquente", env.Event)
 		return
 	}
-	if !c.State().CanAcceptSignaling() || c.PartnerID() == "" {
+	if !c.State().CanAcceptSignaling() {
 		c.SendError("no_session", "aucune session active", env.Event)
 		return
 	}
@@ -336,7 +400,12 @@ func (h *Hub) handleSDP(c *Client, env Envelope) {
 		c.SendError("invalid_sdp", "description SDP rejetée", env.Event)
 		return
 	}
-	h.forward(c, env.Event, payload)
+	target, ok := h.resolveTarget(c, payload.To, env.Event)
+	if !ok {
+		return
+	}
+	payload.From = c.id
+	h.forwardTo(c, target, env.Event, payload)
 }
 
 func (h *Hub) handleICE(c *Client, env Envelope) {
@@ -345,7 +414,7 @@ func (h *Hub) handleICE(c *Client, env Envelope) {
 		c.SendError("rate_limited", "signalisation trop fréquente", env.Event)
 		return
 	}
-	if !c.State().CanAcceptSignaling() || c.PartnerID() == "" {
+	if !c.State().CanAcceptSignaling() {
 		c.SendError("no_session", "aucune session active", env.Event)
 		return
 	}
@@ -355,7 +424,48 @@ func (h *Hub) handleICE(c *Client, env Envelope) {
 		c.SendError("invalid_candidate", "candidat ICE rejeté", env.Event)
 		return
 	}
-	h.forward(c, env.Event, payload)
+	target, ok := h.resolveTarget(c, payload.To, env.Event)
+	if !ok {
+		return
+	}
+	payload.From = c.id
+	h.forwardTo(c, target, env.Event, payload)
+}
+
+// resolveTarget maps a `to` recipient to a session member. Solo calls keep the
+// historic behaviour (the single other member, `to` optional); conferences
+// require an explicit member that is neither the sender nor a stranger.
+func (h *Hub) resolveTarget(c *Client, to, event string) (string, bool) {
+	s, ok := h.sessions.Get(c.SessionID())
+	if !ok || !s.Has(c.id) {
+		c.SendError("no_session", "aucune session active", event)
+		return "", false
+	}
+	members := s.Members()
+	others := make([]string, 0, len(members))
+	for _, id := range members {
+		if id != c.id {
+			others = append(others, id)
+		}
+	}
+	if len(others) == 0 {
+		c.SendError("no_peer", "aucun interlocuteur", event)
+		return "", false
+	}
+	if len(others) == 1 && to == "" {
+		return others[0], true
+	}
+	if to == "" || to == c.id {
+		c.SendError("no_peer", "destinataire inconnu", event)
+		return "", false
+	}
+	for _, id := range others {
+		if id == to {
+			return to, true
+		}
+	}
+	c.SendError("no_peer", "destinataire inconnu", event)
+	return "", false
 }
 
 func (h *Hub) handleChat(c *Client, env Envelope) {
@@ -364,7 +474,13 @@ func (h *Hub) handleChat(c *Client, env Envelope) {
 		c.SendError("rate_limited", "vous envoyez des messages trop vite", env.Event)
 		return
 	}
-	if c.PartnerID() == "" {
+	s, ok := h.sessions.Get(c.SessionID())
+	if !ok || !s.Has(c.id) {
+		c.SendError("no_peer", "aucun interlocuteur", env.Event)
+		return
+	}
+	others := without(s.Members(), c.id)
+	if len(others) == 0 {
 		c.SendError("no_peer", "aucun interlocuteur", env.Event)
 		return
 	}
@@ -384,8 +500,21 @@ func (h *Hub) handleChat(c *Client, env Envelope) {
 	}
 
 	msg := ChatMessagePayload{ID: storage.NewID(), Text: text, From: "peer", At: nowRFC3339()}
-	h.forward(c, EvtChatMessage, msg)
+	for _, id := range others {
+		h.forwardTo(c, id, EvtChatMessage, msg)
+	}
 	c.Send(EvtChatAck, ChatAckPayload{ID: msg.ID, At: msg.At})
+}
+
+// without returns the members other than self.
+func without(members []string, self string) []string {
+	others := make([]string, 0, len(members))
+	for _, id := range members {
+		if id != self {
+			others = append(others, id)
+		}
+	}
+	return others
 }
 
 func (h *Hub) handleReport(c *Client, env Envelope) {
@@ -394,15 +523,14 @@ func (h *Hub) handleReport(c *Client, env Envelope) {
 		c.SendError("rate_limited", "trop de signalements", env.Event)
 		return
 	}
-	target := c.PartnerID()
-	if target == "" {
-		c.SendError("no_peer", "aucun interlocuteur à signaler", env.Event)
-		return
-	}
 	payload, err := decodeData[ReportPayload](env)
 	if err != nil {
 		h.metrics.MessagesRejected.Inc()
 		c.SendError("malformed", "signalement invalide", env.Event)
+		return
+	}
+	target, ok := h.resolveMemberTarget(c, payload.Target, env.Event)
+	if !ok {
 		return
 	}
 	category := strings.ToLower(strings.TrimSpace(payload.Category))
@@ -429,14 +557,21 @@ func (h *Hub) handleReport(c *Client, env Envelope) {
 		}
 	}
 
-	h.terminate(c, storage.SessionReported, "reported")
+	// Only the reported member is ejected: the reporter's conference goes on
+	// with one tile fewer instead of collapsing for everyone.
+	h.removeMember(c.SessionID(), target, "reported", storage.SessionReported, true)
 	c.Send(EvtReportAck, ReportAckPayload{ReportID: reportID, Blocked: blocked, Suspended: suspended})
 }
 
 func (h *Hub) handleBlock(c *Client, env Envelope) {
-	target := c.PartnerID()
-	if target == "" {
-		c.SendError("no_peer", "aucun interlocuteur à bloquer", env.Event)
+	payload, err := decodeData[BlockPayload](env)
+	if err != nil {
+		h.metrics.MessagesRejected.Inc()
+		c.SendError("malformed", "blocage invalide", env.Event)
+		return
+	}
+	target, ok := h.resolveMemberTarget(c, payload.Target, env.Event)
+	if !ok {
 		return
 	}
 	if err := h.moderation.Block(c.id, target); err != nil {
@@ -444,58 +579,123 @@ func (h *Hub) handleBlock(c *Client, env Envelope) {
 		return
 	}
 	h.metrics.Blocks.Inc()
-	h.terminate(c, storage.SessionEnded, "blocked")
+	h.removeMember(c.SessionID(), target, "blocked", storage.SessionEnded, true)
 	c.Send(EvtBlockAck, BlockAckPayload{BlockedID: target})
 }
 
-// forward relays a validated payload to the peer of the current session only.
-// A client can never address a session it does not participate in.
-func (h *Hub) forward(c *Client, event string, payload any) {
-	partnerID := c.PartnerID()
-	if partnerID == "" {
+// resolveMemberTarget maps a report/block target to a session member. Solo
+// calls keep the historic default (the other participant); conferences
+// require the client to name the tile it acted on.
+func (h *Hub) resolveMemberTarget(c *Client, target, event string) (string, bool) {
+	s, ok := h.sessions.Get(c.SessionID())
+	if !ok || !s.Has(c.id) {
 		c.SendError("no_peer", "aucun interlocuteur", event)
-		return
+		return "", false
 	}
-	partner := h.client(partnerID)
-	if partner == nil || partner.SessionID() != c.SessionID() || partner.PartnerID() != c.id {
+	others := without(s.Members(), c.id)
+	if len(others) == 0 {
+		c.SendError("no_peer", "aucun interlocuteur", event)
+		return "", false
+	}
+	if target == "" {
+		if len(others) == 1 {
+			return others[0], true
+		}
+		c.SendError("no_target", "choisissez l'interlocuteur concerné", event)
+		return "", false
+	}
+	if target == c.id {
+		c.SendError("invalid_target", "cible invalide", event)
+		return "", false
+	}
+	for _, id := range others {
+		if id == target {
+			return target, true
+		}
+	}
+	c.SendError("no_peer", "interlocuteur inconnu", event)
+	return "", false
+}
+
+// forwardTo relays a validated payload to one session member. A client can
+// never address a session it does not participate in.
+func (h *Hub) forwardTo(c *Client, targetID, event string, payload any) {
+	target := h.client(targetID)
+	if target == nil || target.SessionID() != c.SessionID() || !target.State().CanAcceptSignaling() {
 		c.SendError("no_peer", "interlocuteur déconnecté", event)
 		return
 	}
 	start := time.Now()
-	if !partner.Send(event, payload) {
+	if !target.Send(event, payload) {
 		h.metrics.MessagesRejected.Inc()
 	}
 	h.metrics.SignalLatency.Observe(time.Since(start))
 }
 
-// terminate closes the current session and notifies the peer. Only the first
-// caller wins, which prevents a double notification when both sides hang up at
-// the same moment.
-func (h *Hub) terminate(c *Client, status storage.SessionStatus, reason string) {
-	partnerID := c.PartnerID()
-	sessionID := c.SessionID()
-	c.Unbind()
-
+// removeMember detaches one participant from a session and settles the room:
+// an emptied session closes, a solo session reduced to one member ends for
+// the last peer too, and conference survivors learn who left via peer.left.
+// notifyRemoved also tells the ejected peer their call is over, which matters
+// for moderation ejects; self-initiated leaves need no such notice.
+func (h *Hub) removeMember(sessionID, peerID, reason string, status storage.SessionStatus, notifyRemoved bool) {
 	if sessionID == "" {
 		return
 	}
-	session, ok := h.sessions.End(sessionID, status, reason)
-	if !ok {
-		return
+	removed := h.client(peerID)
+	if removed != nil {
+		removed.Unbind()
 	}
-	h.metrics.SessionDuration.Observe(session.Duration(time.Now()))
+	h.matcher.Forget(peerID)
 
-	if partnerID == "" {
+	session, empty := h.sessions.RemoveMember(sessionID, peerID)
+	if session == nil {
 		return
 	}
-	if partner := h.client(partnerID); partner != nil {
-		partner.Unbind()
-		partner.Send(EvtSessionEnded, SessionEndedPayload{
+	endPayload := func() SessionEndedPayload {
+		return SessionEndedPayload{
 			SessionID:  sessionID,
 			Reason:     reason,
 			DurationS:  int64(session.Duration(time.Now()).Seconds()),
 			CanRequeue: reason != "reported",
-		})
+		}
+	}
+	if empty {
+		if s, ok := h.sessions.End(sessionID, status, reason); ok {
+			h.metrics.SessionDuration.Observe(s.Duration(time.Now()))
+		}
+		if notifyRemoved && removed != nil {
+			removed.Send(EvtSessionEnded, endPayload())
+		}
+		return
+	}
+	members := session.Members()
+	if len(members) == 1 && session.Mode == storage.SessionSolo {
+		if s, ok := h.sessions.End(sessionID, status, reason); ok {
+			h.metrics.SessionDuration.Observe(s.Duration(time.Now()))
+		}
+		if notifyRemoved && removed != nil {
+			removed.Send(EvtSessionEnded, endPayload())
+		}
+		if last := h.client(members[0]); last != nil {
+			last.Unbind()
+			h.matcher.Forget(last.ID())
+			last.Send(EvtSessionEnded, endPayload())
+		}
+		return
+	}
+	if notifyRemoved && removed != nil {
+		removed.Send(EvtSessionEnded, endPayload())
+	}
+	left := PeerLeftPayload{
+		SessionID: sessionID,
+		PeerID:    peerID,
+		Reason:    reason,
+		Members:   len(members),
+	}
+	for _, id := range members {
+		if m := h.client(id); m != nil {
+			m.Send(EvtPeerLeft, left)
+		}
 	}
 }
 

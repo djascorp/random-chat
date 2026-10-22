@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
-import { ChatIcon, MicIcon, MicOffIcon, PhoneOffIcon, SkipIcon, VideoIcon, VideoOffIcon } from './Icons';
+import { ChatIcon, MicIcon, MicOffIcon, PhoneOffIcon, SkipIcon, UserPlusIcon, VideoIcon, VideoOffIcon } from './Icons';
 import { DeviceMenu } from './DeviceMenu';
 import { SessionMenu } from './SessionMenu';
 
@@ -7,6 +7,8 @@ interface ControlBarProps {
   micEnabled: boolean;
   camEnabled: boolean;
   inCall: boolean;
+  isGroup: boolean;
+  canAdd: boolean;
   chatOpen: boolean;
   unread: number;
   cameras: MediaDeviceInfo[];
@@ -17,6 +19,7 @@ interface ControlBarProps {
   onToggleCam: () => void;
   onNext: () => void;
   onStop: () => void;
+  onAdd: () => void;
   onToggleChat: () => void;
   onReport: () => void;
   onBlock: () => void;
@@ -28,6 +31,8 @@ export function ControlBar({
   micEnabled,
   camEnabled,
   inCall,
+  isGroup,
+  canAdd,
   chatOpen,
   unread,
   cameras,
@@ -38,6 +43,7 @@ export function ControlBar({
   onToggleCam,
   onNext,
   onStop,
+  onAdd,
   onToggleChat,
   onReport,
   onBlock,
@@ -122,6 +128,19 @@ export function ControlBar({
           <SkipIcon size={22} />
           <span className="ctl__label">Suivant</span>
         </button>
+        {isGroup ? (
+          <button
+            type="button"
+            className="ctl"
+            onClick={onAdd}
+            disabled={!canAdd}
+            aria-label={canAdd ? 'Ajouter un participant (A)' : 'Conférence complète'}
+            title={canAdd ? 'Ajouter un participant (A)' : 'Conférence complète'}
+          >
+            <UserPlusIcon size={20} />
+            <span className="ctl__label">Ajouter</span>
+          </button>
+        ) : null}
         <button
           type="button"
           className="ctl ctl--danger"
@@ -147,7 +166,7 @@ export function ControlBar({
           <span className="ctl__label">Chat</span>
         </button>
 
-        <SessionMenu inCall={inCall} onReport={onReport} onBlock={onBlock} />
+        {isGroup ? null : <SessionMenu inCall={inCall} onReport={onReport} onBlock={onBlock} />}
       </div>
     </div>
   );

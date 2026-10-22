@@ -36,11 +36,18 @@ type Peer interface {
 	ID() string
 	State() State
 	SetState(State)
-	// PartnerID is the other participant of the current session, empty when idle.
+	// Mode is the requested call shape: "solo" for a strict 1:1 pairing,
+	// "group" for a conference that late joiners can enter.
+	Mode() string
+	// MaxParticipants caps the conference the peer joins; 0 means the peer
+	// sets no constraint.
+	MaxParticipants() int
+	// PartnerID is the other participant of a solo session, empty otherwise.
 	PartnerID() string
 	// SessionID is the current session identifier, empty when idle.
 	SessionID() string
 	// Bind attaches the peer to a session and moves it into a call.
+	// Group members bind with an empty partnerID: the session owns the roster.
 	Bind(partnerID, sessionID string)
 	// Unbind detaches the peer from any session.
 	Unbind()

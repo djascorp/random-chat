@@ -20,6 +20,8 @@ type fakePeer struct {
 	mu      sync.Mutex
 	id      string
 	state   State
+	mode    string
+	max     int
 	partner string
 	session string
 	events  []recordedEvent
@@ -27,7 +29,25 @@ type fakePeer struct {
 }
 
 func newFakePeer(id string) *fakePeer {
-	return &fakePeer{id: id, state: StateIdle}
+	return &fakePeer{id: id, state: StateIdle, mode: soloMode}
+}
+
+// newGroupPeer builds a waiter for a conference with the given cap
+// (0 means the peer sets no constraint).
+func newGroupPeer(id string, max int) *fakePeer {
+	return &fakePeer{id: id, state: StateIdle, mode: groupMode, max: max}
+}
+
+func (p *fakePeer) Mode() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mode
+}
+
+func (p *fakePeer) MaxParticipants() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.max
 }
 
 func (p *fakePeer) ID() string { return p.id }
@@ -227,6 +247,157 @@ func TestConcurrentJoinsNeverDoubleAssign(t *testing.T) {
 		if partner.SessionID() != p.SessionID() {
 			t.Fatalf("session mismatch between %s and %s", p.id, partnerID)
 		}
+	}
+}
+
+func matchPayloadOf(t *testing.T, p *fakePeer) matchPayloadData {
+	t.Helper()
+	events := p.eventsNamed("match.found")
+	if len(events) != 1 {
+		t.Fatalf("peer %s received %d match.found events, want 1", p.id, len(events))
+	}
+	payload, ok := events[0].payload.(matchPayloadData)
+	if !ok {
+		t.Fatalf("peer %s match.found payload has type %T", p.id, events[0].payload)
+	}
+	return payload
+}
+
+// Two group waiters form a conference as soon as they meet; the member
+// list each of them receives carries the mode and the shared cap.
+func TestGroupFormsConference(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	a, b := newGroupPeer("a", 0), newGroupPeer("b", 4)
+	m.Join(a)
+	if len(a.eventsNamed("match.found")) != 0 {
+		t.Fatal("a single group peer must not be matched")
+	}
+	m.Join(b)
+	if got := manager.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+	for _, p := range []*fakePeer{a, b} {
+		payload := matchPayloadOf(t, p)
+		if payload.Mode != groupMode {
+			t.Fatalf("peer %s mode = %q, want group", p.id, payload.Mode)
+		}
+		if len(payload.Peers) != 2 {
+			t.Fatalf("peer %s sees %d peers, want 2", p.id, len(payload.Peers))
+		}
+		if payload.MaxParticipants != 4 {
+			t.Fatalf("peer %s cap = %d, want 4", p.id, payload.MaxParticipants)
+		}
+		if p.State() != StateInCall {
+			t.Fatalf("peer %s state = %s, want in_call", p.id, p.State())
+		}
+	}
+}
+
+func TestGroupRespectsSmallestCap(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	peers := []*fakePeer{
+		newGroupPeer("a", 3),
+		newGroupPeer("b", 0),
+		newGroupPeer("c", 0),
+		newGroupPeer("d", 0),
+		newGroupPeer("e", 0),
+	}
+	for _, p := range peers {
+		m.Join(p)
+	}
+	// a and b open the first room (capped at 3 by a), c and d open the
+	// second one, e waits alone: rooms never absorb waiters on their own.
+	if got := manager.ActiveCount(); got != 2 {
+		t.Fatalf("active sessions = %d, want 2", got)
+	}
+	if m.Len() != 1 {
+		t.Fatalf("queue length = %d, want only e waiting", m.Len())
+	}
+	if got := len(matchPayloadOf(t, peers[0]).Peers); got != 2 {
+		t.Fatalf("first room has %d members, want 2", got)
+	}
+	// An explicit add pulls e into the first room, which a capped at 3.
+	rooms := manager.GroupSessions()
+	if !m.Fill(rooms[0].ID) {
+		t.Fatal("Fill must pull e into the first room")
+	}
+	if got := len(matchPayloadOf(t, peers[4]).Peers); got != 3 {
+		t.Fatalf("first room has %d members after Fill, want 3", got)
+	}
+	if m.Fill(rooms[0].ID) {
+		t.Fatal("Fill must refuse once the cap is reached")
+	}
+}
+
+// Live rooms never absorb waiters on their own: a group joiner that arrives
+// after the room formed waits until an explicit Fill pulls them in.
+func TestLateJoinerWaitsForExplicitFill(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	a, b := newGroupPeer("a", 3), newGroupPeer("b", 0)
+	m.Join(a)
+	m.Join(b)
+	c := newGroupPeer("c", 0)
+	m.Join(c)
+
+	if got := manager.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+	if len(c.eventsNamed("match.found")) != 0 {
+		t.Fatal("a late joiner must not be pulled in without an explicit add")
+	}
+	rooms := manager.GroupSessions()
+	if len(rooms) != 1 {
+		t.Fatalf("group sessions = %d, want 1", len(rooms))
+	}
+	if !m.Fill(rooms[0].ID) {
+		t.Fatal("Fill must pull the fitting waiter into the room")
+	}
+
+	payload := matchPayloadOf(t, c)
+	if len(payload.Peers) != 3 {
+		t.Fatalf("late joiner sees %d peers, want 3", len(payload.Peers))
+	}
+	for _, p := range []*fakePeer{a, b} {
+		if got := len(p.eventsNamed("peer.joined")); got != 1 {
+			t.Fatalf("peer %s received %d peer.joined events, want 1", p.id, got)
+		}
+	}
+	if got := len(c.eventsNamed("peer.joined")); got != 0 {
+		t.Fatalf("late joiner received %d peer.joined events, want 0", got)
+	}
+	if m.Len() != 0 {
+		t.Fatalf("queue length = %d, want 0", m.Len())
+	}
+}
+
+func TestFillRefusesFullRoom(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	m.Join(newGroupPeer("a", 2))
+	m.Join(newGroupPeer("b", 0))
+	m.Join(newGroupPeer("c", 0))
+
+	rooms := manager.GroupSessions()
+	if len(rooms) != 1 {
+		t.Fatalf("group sessions = %d, want 1", len(rooms))
+	}
+	// The room holds {a, b} at a's cap of 2; c waits for another room.
+	if m.Fill(rooms[0].ID) {
+		t.Fatal("Fill must refuse a room that reached its cap")
+	}
+	if got := manager.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+}
+
+func TestSoloAndGroupNeverMix(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	m.Join(newFakePeer("solo"))
+	m.Join(newGroupPeer("group", 0))
+	if got := manager.ActiveCount(); got != 0 {
+		t.Fatalf("mixed modes were paired, active sessions = %d", got)
+	}
+	if m.Len() != 2 {
+		t.Fatalf("queue length = %d, want 2", m.Len())
 	}
 }
 

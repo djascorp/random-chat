@@ -246,6 +246,163 @@ func TestQueueJoinMatchesTwoClientsAndRelaysSignaling(t *testing.T) {
 	offerer.await(EvtChatAck, time.Second)
 }
 
+func decodeMatch(t *testing.T, env Envelope) map[string]any {
+	t.Helper()
+	var payload map[string]any
+	mustDecode(t, env.Data, &payload)
+	return payload
+}
+
+func peerIDs(t *testing.T, payload map[string]any) []string {
+	t.Helper()
+	raw, ok := payload["peers"].([]any)
+	if !ok {
+		t.Fatalf("match.found carries no peers list: %v", payload)
+	}
+	out := make([]string, 0, len(raw))
+	for _, id := range raw {
+		s, ok := id.(string)
+		if !ok || s == "" {
+			t.Fatalf("match.found carries an invalid peer: %v", payload)
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func joinGroup(t *testing.T, c *testClient, max int) {
+	t.Helper()
+	c.send(EvtQueueJoin, QueueJoinPayload{Mode: "group", MaxParticipants: max})
+}
+
+// TestGroupConferenceAddAndMesh verifies the full conference path: group
+// search prefs form a room, session.add pulls a waiter in, chat fans out to
+// every member, and SDP carries an explicit recipient plus the sender.
+func TestGroupConferenceAddAndMesh(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	c := dial(t, srv, "client-cccccccc")
+
+	joinGroup(t, a, 4)
+	a.await(EvtQueueWaiting, 2*time.Second)
+	joinGroup(t, b, 0)
+	match := decodeMatch(t, a.await(EvtMatchFound, 2*time.Second))
+	decodeMatch(t, b.await(EvtMatchFound, 2*time.Second))
+	if got := len(peerIDs(t, match)); got != 2 {
+		t.Fatalf("room has %d members, want 2", got)
+	}
+	if match["mode"] != "group" {
+		t.Fatalf("mode = %v, want group", match["mode"])
+	}
+
+	// A late group waiter does not barge in on its own.
+	joinGroup(t, c, 0)
+	c.await(EvtQueueWaiting, 2*time.Second)
+	if got := hub.sessions.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+
+	// The Ajouter button pulls them in: newcomer first, then the room.
+	a.send(EvtSessionAdd, nil)
+	joined := decodeMatch(t, c.await(EvtMatchFound, 2*time.Second))
+	if got := len(peerIDs(t, joined)); got != 3 {
+		t.Fatalf("room has %d members after add, want 3", got)
+	}
+	for _, m := range []*testClient{a, b} {
+		notice := m.await(EvtPeerJoined, 2*time.Second)
+		var payload PeerJoinedPayload
+		mustDecode(t, notice.Data, &payload)
+		if payload.PeerID != c.userID {
+			t.Fatalf("peer.joined announces %q, want %q", payload.PeerID, c.userID)
+		}
+	}
+	if got := hub.sessions.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+
+	// Chat fans out to every other member.
+	a.send(EvtChatSend, ChatSendPayload{Text: "salut à tous"})
+	for _, m := range []*testClient{b, c} {
+		msg := m.await(EvtChatMessage, 2*time.Second)
+		var payload ChatMessagePayload
+		mustDecode(t, msg.Data, &payload)
+		if payload.Text != "salut à tous" {
+			t.Fatalf("chat text = %q, want the broadcast", payload.Text)
+		}
+	}
+
+	// Signaling names its recipient and the server stamps the sender.
+	a.send(EvtRTCOffer, SDPPayload{Type: "offer", SDP: "v=0", To: c.userID})
+	relayed := c.await(EvtRTCOffer, 2*time.Second)
+	var sdp SDPPayload
+	mustDecode(t, relayed.Data, &sdp)
+	if sdp.From != a.userID {
+		t.Fatalf("relayed offer from = %q, want %q", sdp.From, a.userID)
+	}
+
+	// An offer without a recipient is ambiguous in a conference.
+	b.send(EvtRTCOffer, SDPPayload{Type: "offer", SDP: "v=0"})
+	failed := b.await(EvtError, 2*time.Second)
+	var protocolErr ErrorPayload
+	mustDecode(t, failed.Data, &protocolErr)
+	if protocolErr.Code != "no_peer" {
+		t.Fatalf("error code = %q, want no_peer", protocolErr.Code)
+	}
+}
+
+// TestReportEjectsOnlyTargetInConference checks that reporting one tile does
+// not collapse the room: the target is ejected, the survivors stay connected.
+func TestReportEjectsOnlyTargetInConference(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	c := dial(t, srv, "client-cccccccc")
+
+	joinGroup(t, a, 0)
+	a.await(EvtQueueWaiting, 2*time.Second)
+	joinGroup(t, b, 0)
+	a.await(EvtMatchFound, 2*time.Second)
+	b.await(EvtMatchFound, 2*time.Second)
+	joinGroup(t, c, 0)
+	c.await(EvtQueueWaiting, 2*time.Second)
+	a.send(EvtSessionAdd, nil)
+	c.await(EvtMatchFound, 2*time.Second)
+	a.await(EvtPeerJoined, 2*time.Second)
+	b.await(EvtPeerJoined, 2*time.Second)
+
+	a.send(EvtReportCreate, ReportPayload{Category: "spam", Reason: "pub", Target: c.userID})
+	a.await(EvtReportAck, 2*time.Second)
+
+	ended := c.await(EvtSessionEnded, 2*time.Second)
+	var endPayload SessionEndedPayload
+	mustDecode(t, ended.Data, &endPayload)
+	if endPayload.Reason != "reported" {
+		t.Fatalf("end reason = %q, want reported", endPayload.Reason)
+	}
+
+	for _, m := range []*testClient{a, b} {
+		left := m.await(EvtPeerLeft, 2*time.Second)
+		var payload PeerLeftPayload
+		mustDecode(t, left.Data, &payload)
+		if payload.PeerID != c.userID || payload.Members != 2 {
+			t.Fatalf("peer.left = %+v, want %q with 2 members left", payload, c.userID)
+		}
+	}
+	if got := hub.sessions.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want the room to survive", got)
+	}
+	if got := hub.QueueLength(); got != 0 {
+		t.Fatalf("queue length = %d, want 0", got)
+	}
+}
+
 func TestNextEndsSessionAndRequeuesOnlyRequester(t *testing.T) {
 	hub := newTestHub(t)
 	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))

@@ -68,6 +68,15 @@ func (q *Queue) IDs() []string {
 	return out
 }
 
+// Snapshot returns the waiting peers oldest first.
+func (q *Queue) Snapshot() []Peer {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]Peer, len(q.items))
+	copy(out, q.items)
+	return out
+}
+
 // PopPair removes and returns the two oldest peers that `compatible` accepts.
 // The queue is only mutated when a pair is found, so a failed attempt leaves the
 // waiting order untouched. FIFO order is preserved for everyone else.
