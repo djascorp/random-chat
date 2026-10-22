@@ -6,6 +6,10 @@ interface VideoSurfaceProps {
   mirrored?: boolean;
   className?: string;
   label?: string;
+  /** 0–1 output level for this element (applies to unmuted remote audio). */
+  volume?: number;
+  /** Escape hatch for imperative APIs (fullscreen, Picture-in-Picture). */
+  elementRef?: (element: HTMLVideoElement | null) => void;
 }
 
 /**
@@ -15,8 +19,8 @@ interface VideoSurfaceProps {
  * and `play()` is retried because some browsers reject autoplay until the
  * element is visible.
  */
-export function VideoSurface({ stream, muted, mirrored, className, label }: VideoSurfaceProps) {
-  const ref = useRef<HTMLVideoElement>(null);
+export function VideoSurface({ stream, muted, mirrored, className, label, volume, elementRef }: VideoSurfaceProps) {
+  const ref = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const element = ref.current;
@@ -31,9 +35,20 @@ export function VideoSurface({ stream, muted, mirrored, className, label }: Vide
     }
   }, [stream]);
 
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || volume === undefined) return;
+    const clamped = Math.min(1, Math.max(0, volume));
+    element.volume = clamped;
+    element.muted = Boolean(muted) || clamped === 0;
+  }, [volume, muted]);
+
   return (
     <video
-      ref={ref}
+      ref={(element) => {
+        ref.current = element;
+        elementRef?.(element);
+      }}
       className={[className, mirrored ? 'is-mirrored' : ''].filter(Boolean).join(' ')}
       autoPlay
       playsInline

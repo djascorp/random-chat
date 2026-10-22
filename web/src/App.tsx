@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRandomChat } from './hooks/useRandomChat';
 import type { SessionMode } from './types';
 import { Landing } from './components/Landing';
@@ -11,16 +11,32 @@ import { Toasts } from './components/Toasts';
 import { SparkIcon } from './components/Icons';
 
 const DEFAULT_MAX_RUNES = 1000;
+const VOLUME_STORAGE_KEY = 'random-chat.volume';
+const CONTROLS_IDLE_MS = 4000;
+
+function readVolume(): number {
+  try {
+    const raw = window.localStorage.getItem(VOLUME_STORAGE_KEY);
+    const parsed = raw === null ? NaN : Number(raw);
+    return Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : 1;
+  } catch {
+    return 1;
+  }
+}
 
 export default function App() {
   const chat = useRandomChat();
   const [reportOpen, setReportOpen] = useState(false);
   const [reportTarget, setReportTarget] = useState<string | null>(null);
+  const [volume, setVolume] = useState<number>(readVolume);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const idleTimerRef = useRef<number | null>(null);
 
   const active = chat.status !== 'idle';
   const inCall =
     chat.status === 'connected' || chat.status === 'connecting' || chat.status === 'reconnecting';
   const showControls = active && chat.status !== 'error';
+  const controlsDimmed = inCall && !controlsVisible;
   const isGroup = chat.sessionMode === 'group';
   const membersCount = chat.members.length;
   const canAdd =
@@ -78,6 +94,43 @@ export default function App() {
     },
     [chat],
   );
+
+  // WhatsApp behaviour: during a live call the bar fades away after a few
+  // idle seconds and comes back on any input. Never hidden while a panel or
+  // dialog is open, while searching, or on error screens.
+  const dimActive = inCall && !chat.chatOpen && !reportOpen;
+  const bumpControls = useCallback(() => {
+    setControlsVisible(true);
+    if (idleTimerRef.current !== null) window.clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = window.setTimeout(() => setControlsVisible(false), CONTROLS_IDLE_MS);
+  }, []);
+
+  useEffect(() => {
+    if (!dimActive) {
+      setControlsVisible((prev) => (prev ? prev : true));
+      if (idleTimerRef.current !== null) {
+        window.clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
+      return;
+    }
+    idleTimerRef.current = window.setTimeout(() => setControlsVisible(false), CONTROLS_IDLE_MS);
+    const events = ['pointermove', 'pointerdown', 'keydown', 'touchstart'] as const;
+    events.forEach((name) => window.addEventListener(name, bumpControls, { passive: true }));
+    return () => {
+      if (idleTimerRef.current !== null) window.clearTimeout(idleTimerRef.current);
+      events.forEach((name) => window.removeEventListener(name, bumpControls));
+    };
+  }, [dimActive, bumpControls]);
+
+  const handleVolumeChange = useCallback((next: number) => {
+    setVolume(next);
+    try {
+      window.localStorage.setItem(VOLUME_STORAGE_KEY, String(next));
+    } catch {
+      /* private mode — level just won't persist */
+    }
+  }, []);
 
   // Keyboard shortcuts for the in-call bar. Ignored while typing, while the
   // consent gate is showing, or before a session exists.
@@ -177,6 +230,8 @@ export default function App() {
             sessionMax={chat.sessionMax}
             membersCount={membersCount}
             error={chat.error}
+            volume={volume}
+            dimmed={controlsDimmed}
             onRetry={handleRetry}
             onBack={handleBack}
             onReportPeer={handleReportPeer}
@@ -207,6 +262,8 @@ export default function App() {
           microphones={chat.devices.microphones}
           selectedCamera={chat.selectedCamera}
           selectedMicrophone={chat.selectedMicrophone}
+          volume={volume}
+          dimmed={controlsDimmed}
           searchMode={chat.searchMode}
           searchMax={chat.searchMax}
           onSearchPrefs={chat.changeSearchPrefs}
@@ -220,6 +277,7 @@ export default function App() {
           onBlock={() => chat.blockPeer(reportTargets[0]?.id)}
           onSelectCamera={(deviceId) => void chat.switchCamera(deviceId)}
           onSelectMicrophone={(deviceId) => void chat.switchMicrophone(deviceId)}
+          onVolumeChange={handleVolumeChange}
         />
       ) : null}
 

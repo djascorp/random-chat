@@ -1,6 +1,6 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { SessionMode } from '../types';
-import { ChatIcon, MicIcon, MicOffIcon, PhoneOffIcon, SkipIcon, UserPlusIcon, VideoIcon, VideoOffIcon } from './Icons';
+import { ChatIcon, MicIcon, MicOffIcon, PhoneOffIcon, SkipIcon, UserPlusIcon, VideoIcon, VideoOffIcon, VolumeIcon, VolumeOffIcon } from './Icons';
 import { DeviceMenu } from './DeviceMenu';
 import { SearchPrefsMenu } from './SearchPrefs';
 import { SessionMenu } from './SessionMenu';
@@ -17,6 +17,10 @@ interface ControlBarProps {
   microphones: MediaDeviceInfo[];
   selectedCamera: string | null;
   selectedMicrophone: string | null;
+  /** Remote audio level, 0–1. */
+  volume: number;
+  /** True while the WhatsApp-style idle fade has kicked in. */
+  dimmed: boolean;
   searchMode: SessionMode;
   searchMax: number;
   onSearchPrefs: (mode: SessionMode, max: number) => void;
@@ -30,6 +34,7 @@ interface ControlBarProps {
   onBlock: () => void;
   onSelectCamera: (deviceId: string) => void;
   onSelectMicrophone: (deviceId: string) => void;
+  onVolumeChange: (volume: number) => void;
 }
 
 export function ControlBar({
@@ -44,6 +49,8 @@ export function ControlBar({
   microphones,
   selectedCamera,
   selectedMicrophone,
+  volume,
+  dimmed,
   searchMode,
   searchMax,
   onSearchPrefs,
@@ -57,8 +64,10 @@ export function ControlBar({
   onBlock,
   onSelectCamera,
   onSelectMicrophone,
+  onVolumeChange,
 }: ControlBarProps) {
   const barRef = useRef<HTMLDivElement>(null);
+  const [volumeOpen, setVolumeOpen] = useState(false);
 
   // Publishes the bar's real height as --controls-height so the stage reserves
   // exactly the right amount of room. Hard-coding that reserve broke as soon as
@@ -89,7 +98,7 @@ export function ControlBar({
   }, []);
 
   return (
-    <div className="controls" ref={barRef}>
+    <div className={`controls ${dimmed ? "controls--dim" : ""}`} ref={barRef}>
       <div className="controls__group">
         <button
           type="button"
@@ -164,6 +173,37 @@ export function ControlBar({
       </div>
 
       <div className="controls__group">
+        <div className="vol">
+          <button
+            type="button"
+            className={`ctl ${volume === 0 ? 'ctl--muted' : ''}`}
+            onClick={() => setVolumeOpen((open) => !open)}
+            aria-expanded={volumeOpen}
+            aria-label="Volume de l’appelant"
+            title="Volume de l’appelant"
+          >
+            {volume === 0 ? <VolumeOffIcon size={20} /> : <VolumeIcon size={20} />}
+            <span className="ctl__label">Volume</span>
+          </button>
+          {volumeOpen ? (
+            <div className="vol__pop" role="group" aria-label="Réglage du volume de l’appelant">
+              <span className="vol__icon">
+                {volume === 0 ? <VolumeOffIcon size={16} /> : <VolumeIcon size={16} />}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={Math.round(Math.min(1, Math.max(0, volume)) * 100)}
+                onChange={(event) => onVolumeChange(Number(event.target.value) / 100)}
+                aria-label="Niveau du volume"
+              />
+              <span className="vol__value">{Math.round(Math.min(1, Math.max(0, volume)) * 100)}%</span>
+            </div>
+          ) : null}
+        </div>
+
         <button
           type="button"
           className={`ctl ${chatOpen ? 'ctl--active' : ''}`}

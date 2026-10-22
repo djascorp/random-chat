@@ -1073,3 +1073,313 @@
     width: auto;
   }
 }
+
+/* =========================================================================
+   WhatsApp-style call controls (v2)
+   Circular translucent buttons, red hang-up at the far right, bar and HUD
+   fade away after a few idle seconds during a live call. Appended last so
+   these rules win over the base styles at equal specificity.
+   ========================================================================= */
+
+.ctl {
+  width: 54px;
+  height: 54px;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+.ctl:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+.ctl__label {
+  display: none;
+}
+/* Muted device: white filled circle with dark glyph, like WhatsApp. */
+.ctl--off,
+.ctl--muted {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: transparent;
+  color: #101012;
+}
+.ctl--off:hover:not(:disabled),
+.ctl--muted:hover:not(:disabled) {
+  background: #ffffff;
+  color: #101012;
+}
+.ctl--active {
+  background: var(--signal-soft);
+  border-color: var(--signal-border);
+  color: var(--signal);
+}
+/* "Next" keeps a live tint; hang-up is the only saturated red, slightly bigger. */
+.ctl--primary {
+  background: rgba(76, 195, 138, 0.2);
+  border-color: rgba(76, 195, 138, 0.4);
+  color: var(--signal);
+}
+.ctl--primary:hover:not(:disabled) {
+  background: rgba(76, 195, 138, 0.32);
+  border-color: rgba(76, 195, 138, 0.55);
+}
+.ctl--danger {
+  width: 60px;
+  height: 60px;
+  background: #e5484d;
+  border-color: transparent;
+  color: #ffffff;
+}
+.ctl--danger:hover:not(:disabled) {
+  background: #f2555a;
+}
+
+.controls {
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(18, 18, 20, 0.72);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+.controls--dim {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(8px);
+}
+
+.stage__hud,
+.stage__hud-scrim {
+  transition: opacity 0.4s ease;
+}
+.stage--dim .stage__hud,
+.stage--dim .stage__hud-scrim {
+  opacity: 0;
+}
+
+/* Browser Picture-in-Picture pill action in the HUD. */
+.pill--action {
+  cursor: pointer;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.pill--action:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Self view: drag to move, tap to swap with the main view (solo calls). */
+.stage__local {
+  cursor: grab;
+  touch-action: none;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  transition: box-shadow 0.2s ease;
+  user-select: none;
+}
+.stage__local:active {
+  cursor: grabbing;
+}
+.stage__local:hover {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6), 0 0 0 2px rgba(255, 255, 255, 0.22);
+}
+
+/* Speaking rings: the frame of whoever produces sound glows. */
+.stage__remote.is-speaking::after,
+.stage__local.is-speaking::after,
+.stage__pinned.is-speaking::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--signal);
+  box-shadow: 0 0 0 3px rgba(76, 195, 138, 0.28);
+  pointer-events: none;
+  animation: speakPulse 1.2s ease-in-out infinite;
+  z-index: 3;
+}
+.tile__video.is-speaking-glow {
+  box-shadow: inset 0 0 0 2px var(--signal), inset 0 0 14px rgba(76, 195, 138, 0.35);
+}
+.tile__label.is-speaking-text {
+  color: var(--signal);
+}
+@keyframes speakPulse {
+  0%,
+  100% {
+    opacity: 0.95;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* Grid tiles are tappable: they lift the participant to the main frame. */
+.tile {
+  cursor: pointer;
+}
+.tile:hover {
+  outline: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+/* Pinned participant takes the main frame; the rest shrink into a strip. */
+.stage__pinned {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  background: var(--bg);
+}
+.stage__pinned .stage__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.stage__unpin {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 4;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(18, 18, 20, 0.78);
+  backdrop-filter: blur(12px);
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.16s ease;
+}
+.stage__unpin:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.stage__strip {
+  position: absolute;
+  top: 64px;
+  right: 14px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: calc(100% - 140px);
+  overflow-y: auto;
+  width: 118px;
+}
+.stage__strip .tile--mini {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.stage__strip .tile--mini .tile__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.stage__strip .tile--mini .tile__label {
+  position: absolute;
+  left: 6px;
+  bottom: 4px;
+  font-size: 0.62rem;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+/* Soft fade-in whenever a video surface becomes live. */
+.stage__video,
+.tile__video,
+.stage__local-video {
+  animation: videoIn 0.5s ease;
+}
+@keyframes videoIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Fullscreen placeholder (swapped-in local view without camera, etc.). */
+.stage__off {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+  background: radial-gradient(60% 60% at 50% 40%, rgba(255, 255, 255, 0.05), transparent), var(--bg);
+}
+.stage__off span {
+  font-size: 0.95rem;
+}
+
+/* Softer waiting placeholder (bubble instead of bare text). */
+.stage__scrim-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border);
+  animation: avatarPulse 2.2s ease-in-out infinite;
+}
+@keyframes avatarPulse {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Volume popover above its button. */
+.vol {
+  position: relative;
+}
+.vol__pop {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 200px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(18, 18, 20, 0.92);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+  z-index: 50;
+}
+.vol__icon {
+  display: inline-flex;
+  color: var(--muted-strong);
+}
+.vol__pop input[type='range'] {
+  flex: 1;
+  accent-color: #ffffff;
+}
+.vol__value {
+  min-width: 38px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: var(--muted-strong);
+}

@@ -257,3 +257,24 @@ export const SparkIcon = ({ size = 20, className }: IconProps) =>
       <path d="M8.3 15.7l-2.1 2.1" />
     </>,
   );
+
+export const VolumeIcon = ({ size = 20, className }: IconProps) =>
+  base(
+    size,
+    className,
+    <path d="M11 5 6.5 9H3v6h3.5L11 19V5Zm3.5 3.5a5 5 0 0 1 0 7m2.8-10.2a8.5 8.5 0 0 1 0 13.4" />,
+  );
+
+export const VolumeOffIcon = ({ size = 20, className }: IconProps) =>
+  base(
+    size,
+    className,
+    <path d="M11 5 6.5 9H3v6h3.5L11 19V5Zm6 4 5 6m0-6-5 6" />,
+  );
+
+export const PipIcon = ({ size = 20, className }: IconProps) =>
+  base(
+    size,
+    className,
+    <path d="M3 5.5h18v13H3V5.5Zm10 6.5h6v4.5h-6V12Z" />,
+  );
