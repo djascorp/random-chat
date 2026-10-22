@@ -1,288 +1,291 @@
-# RandomChat — chat vidéo aléatoire
+# RandomChat — Random Video Chat
 
-Application de chat vidéo aléatoire inspirée d'Omegle : on arrive, on autorise sa caméra,
-on est mis en relation avec une personne disponible, on discute, puis on passe au suivant.
+Random one-to-one video chat in the spirit of Omegle: open the page, allow the
+camera, get matched with someone available, talk, then click Next.
 
-Ce dépôt contient le MVP décrit dans le plan d'implémentation : **Go + WebRTC natif + React**,
-avec une architecture modulaire pensée pour grandir (multi-instances, SFU) sans réécriture.
+This repository holds the MVP: **Go + native WebRTC + React**, with a modular
+architecture designed to grow (multi-instance, SFU) without a rewrite.
 
 ---
 
-## 1. Ce qui fonctionne
+## 1. What works
 
-| Domaine | État |
+| Area | Status |
 | --- | --- |
-| Mise en relation aléatoire (file d'attente, `Suivant`, annulation, expiration) | ✅ |
-| Appel vidéo 1:1 pair à pair (WebRTC, STUN, repli TURN) | ✅ |
-| Signalisation WebSocket validée côté serveur | ✅ |
-| Chat texte pendant la session | ✅ |
-| Signalement, blocage, suspensions automatiques | ✅ |
-| Limitation de débit par utilisateur et par IP | ✅ |
-| Métriques (`/metrics`, `/api/stats`) et journal d'audit | ✅ |
-| API d'administration protégée par jeton | ✅ |
-| PostgreSQL (persistance) + repli mémoire | ✅ |
-| Interface responsive, thème sombre, mobile inclus | ✅ |
-| Tests unitaires, tests d'intégration WebSocket, `-race` | ✅ |
+| Random matching (queue, Next, cancel, expiry) | ✅ |
+| 1:1 peer-to-peer video calls (WebRTC, STUN, TURN fallback) | ✅ |
+| Server-validated WebSocket signaling | ✅ |
+| Text chat during the session | ✅ |
+| Reports, blocks, automatic suspensions | ✅ |
+| Per-user and per-IP rate limiting | ✅ |
+| Metrics (`/metrics`, `/api/stats`) and audit log | ✅ |
+| Token-protected admin API | ✅ |
+| PostgreSQL persistence with in-memory fallback | ✅ |
+| Responsive UI with dark theme, mobile included | ✅ |
+| Unit tests, WebSocket integration tests, `-race` | ✅ |
 
-Non inclus volontairement dans ce MVP : comptes sociaux, cadeaux virtuels, filtres avancés,
-enregistrement des sessions, SFU.
+Deliberately out of scope for this MVP: social accounts, virtual gifts,
+advanced filters, session recording, SFU.
 
 ---
 
 ## 2. Architecture
 
+```text
+Browser A  ⇄  Go server (signaling, matching, moderation)  ⇄  Browser B
+      └────────────────── direct WebRTC media ────────────────────┘
+                    (relayed by TURN only when needed)
 ```
-Navigateur A  ⇄  serveur Go (signalisation, matching, modération)  ⇄  Navigateur B
-      └───────────────────── flux média WebRTC direct ──────────────────────┘
-                     (relayé par TURN uniquement si nécessaire)
-```
 
-- **Le serveur ne voit jamais la vidéo.** Il échange des offres/réponses SDP et des
-  candidats ICE, choisit les interlocuteurs, applique les règles et ferme les sessions.
-- **Le matching vit en mémoire**, sérialisé par un seul verrou : c'est ce qui garantit
-  qu'un utilisateur ne peut appartenir qu'à une seule session, même quand deux clics
-  arrivent au même instant.
-- **PostgreSQL est hors du chemin chaud** : les écritures d'audit partent dans une
-  goroutine, la signalisation ne bloque jamais sur la base.
-- **Redis n'est pas nécessaire au MVP.** Le jour où plusieurs instances Go tournent en
-  parallèle, la file d'attente et les sessions deviennent les deux seuls composants à
-  déporter derrière une interface.
+- **The server never sees video.** It exchanges SDP offers/answers and ICE
+  candidates, picks peers, enforces rules, and closes sessions.
+- **Matching lives in memory**, serialized by a single lock: this guarantees a
+  user can only belong to one session, even when two clicks arrive at the
+  same instant.
+- **PostgreSQL stays off the hot path**: audit writes go to a goroutine,
+  signaling never blocks on the database.
+- **No Redis needed for the MVP.** When several Go instances run in parallel,
+  the queue and the sessions are the only two components to move behind an
+  interface.
 
-### Pile technique
+### Tech stack
 
-| Couche | Choix |
+| Layer | Choice |
 | --- | --- |
 | Frontend | React 18 + TypeScript + Vite |
-| Vidéo | WebRTC natif (`RTCPeerConnection`) |
-| Signalisation | WebSocket (`gorilla/websocket`) |
-| Backend | Go (bibliothèque standard, `net/http`) |
-| Persistance | PostgreSQL via `pgx`, repli mémoire |
-| Réseau média | STUN public + TURN (coturn) |
-| Déploiement | Docker multi-étapes, une seule image |
+| Video | Native WebRTC (`RTCPeerConnection`) |
+| Signaling | WebSocket (`gorilla/websocket`) |
+| Backend | Go (standard library, `net/http`) |
+| Persistence | PostgreSQL via `pgx`, in-memory fallback |
+| Media network | Public STUN + TURN (coturn) |
+| Deployment | Multi-stage Docker, single image |
 
 ---
 
-## 3. Démarrage
+## 3. Getting started
 
-### Prérequis
+### Prerequisites
 
-- Go 1.24+ (testé avec 1.27)
-- Node.js 20+ (testé avec 24)
-- Optionnel : Docker + Docker Compose, PostgreSQL 14+
+- Go 1.24+ (tested with 1.27)
+- Node.js 20+ (tested with 24)
+- Optional: Docker + Docker Compose, PostgreSQL 14+
 
-### Développement en deux terminaux
+### Development with two terminals
 
 ```bash
-make deps            # modules Go + paquets npm
+make deps            # Go modules + npm packages
 
-# terminal 1 — backend sur :8080
+# terminal 1 — backend on :8080
 make dev-api
 
-# terminal 2 — frontend sur :5173, proxy /api et /ws vers :8080
+# terminal 2 — frontend on :5173, proxies /api and /ws to :8080
 make dev-web
 ```
 
-Ouvrez <http://localhost:5173>. Deux onglets (ou deux navigateurs) suffisent pour tester une
-mise en relation complète.
+Open <http://localhost:5173>. Two tabs (or two browsers) are enough to test a
+full match.
 
-> La caméra n'est accessible qu'en `https://` ou sur `localhost`. Pour tester depuis un
-> téléphone sur le réseau local, il faut un tunnel HTTPS (Caddy, ngrok, Cloudflare Tunnel).
+> The camera only works over `https://` or on `localhost`. To test from a
+> phone on the local network, use an HTTPS tunnel (Caddy, ngrok,
+> Cloudflare Tunnel).
 
-### Mode production en une commande
+### Production in one command
 
 ```bash
-make build           # bundle React + binaire Go
-make run             # sert l'API et le SPA sur :8080
+make build           # React bundle + Go binary
+make run             # serves the API and the SPA on :8080
 ```
 
 ### Docker
 
 ```bash
-cp .env.example .env          # renseignez ADMIN_TOKEN et, en prod, TURN_*
+cp .env.example .env          # fill in ADMIN_TOKEN and, in prod, TURN_*
 make docker-up                # API + PostgreSQL
-make docker-up-turn           # ajoute le relais coturn
+make docker-up-turn           # adds the coturn relay
 ```
 
 ---
 
 ## 4. Configuration
 
-Toutes les variables ont une valeur par défaut utilisable en local. Voir `.env.example`
-pour la liste complète ; les plus importantes :
+Every variable has a usable local default. See `.env.example` for the full
+list; the most important ones:
 
-| Variable | Défaut | Rôle |
+| Variable | Default | Role |
 | --- | --- | --- |
-| `ADDR` | `:8080` | Adresse d'écoute |
-| `ALLOWED_ORIGINS` | `localhost:5173`, `localhost:8080` | Origines **supplémentaires** autorisées à ouvrir le WebSocket. Le *same-origin* est toujours accepté, donc un déploiement qui sert le SPA depuis ce même serveur fonctionne sans rien configurer. N'y listez que les autres origines (serveur de dev Vite, domaine séparé). **Jamais `*` en production.** |
-| `DATABASE_URL` | *(vide)* | Vide = stockage mémoire. |
-| `ICE_SERVERS` | STUN Google | Tableau JSON au format `RTCIceServer`. |
-| `TURN_URLS` / `TURN_USERNAME` / `TURN_CREDENTIAL` | *(vide)* | Raccourci qui ajoute un serveur TURN à la liste ICE. |
-| `ADMIN_TOKEN` | *(vide)* | Vide = API d'administration désactivée (404). |
-| `QUEUE_TIMEOUT` | `90s` | Durée maximale d'attente avant `queue.timeout`. |
-| `AUTO_SUSPEND_AFTER` | `3` | Nombre de signalements distincts déclenchant une suspension. |
-| `WEB_DIR` | `web/dist` | Dossier du SPA compilé. |
+| `ADDR` | `:8080` | Listen address |
+| `ALLOWED_ORIGINS` | `localhost:5173`, `localhost:8080` | **Extra** origins allowed to open the WebSocket. Same-origin is always accepted, so a deployment serving the SPA from this same server works with no configuration. List only other origins (Vite dev server, separate domain). Never `*` in production. |
+| `DATABASE_URL` | *(empty)* | Empty means in-memory storage. |
+| `ICE_SERVERS` | Google STUN | JSON array in `RTCIceServer` format. |
+| `TURN_URLS` / `TURN_USERNAME` / `TURN_CREDENTIAL` | *(empty)* | Shortcut that appends a TURN server to the ICE list. |
+| `ADMIN_TOKEN` | *(empty)* | Empty means the admin API is disabled (404). |
+| `QUEUE_TIMEOUT` | `90s` | Maximum wait before `queue.timeout`. |
+| `AUTO_SUSPEND_AFTER` | `3` | Distinct reports triggering a suspension. |
+| `WEB_DIR` | `web/dist` | Built SPA directory. |
 
-### Activer TURN (indispensable hors réseau ouvert)
+### Enabling TURN (required outside open networks)
 
-1. Déployez coturn avec `deploy/coturn/turnserver.conf` en remplaçant le secret.
-2. Renseignez côté API :
+1. Deploy coturn with `deploy/coturn/turnserver.conf`, replacing the secret.
+2. Set on the API side:
    ```bash
-   TURN_URLS="turn:turn.exemple.net:3478?transport=udp,turn:turn.exemple.net:3478?transport=tcp"
+   TURN_URLS="turn:turn.example.net:3478?transport=udp,turn:turn.example.net:3478?transport=tcp"
    TURN_USERNAME=randomchat
-   TURN_CREDENTIAL=<le secret>
+   TURN_CREDENTIAL=<the secret>
    ```
-3. Vérifiez que `GET /api/config` renvoie bien `features.turn_relay: true`.
+3. Check that `GET /api/config` returns `features.turn_relay: true`.
 
-Sans TURN, les appels échouent derrière un NAT symétrique ou un pare-feu d'entreprise —
-c'est la cause numéro un d'échec de connexion en production.
+Without TURN, calls fail behind symmetric NATs or corporate firewalls — the
+number one cause of connection failure in production.
 
 ---
 
-## 5. Protocole WebSocket
+## 5. WebSocket protocol
 
-Endpoint : `GET /ws?cid=<identifiant-client>`
+Endpoint: `GET /ws?cid=<client-id>`
 
-L'identifiant `cid` est un jeton opaque stocké dans le `localStorage` (format
-`^[a-z0-9-]{8,64}$`). Il sert à faire survivre blocages et suspensions à un rechargement de
-page sans imposer de compte. Le serveur le traite comme **non fiable** : il le valide, et
-applique la limitation de débit sur l'origine réseau.
+The `cid` is an opaque token stored in `localStorage`
+(`^[a-z0-9-]{8,64}$`). It lets blocks and suspensions survive a page reload
+without requiring an account. The server treats it as **untrusted**: it
+validates it and rate-limits on the network origin.
 
-Chaque trame est une enveloppe JSON : `{ "event": "...", "data": { ... } }`.
+Every frame is a JSON envelope: `{ "event": "...", "data": { ... } }`.
 
-### Client → serveur
+### Client → server
 
-| Événement | Rôle |
+| Event | Role |
 | --- | --- |
-| `queue.join` | Demander une mise en relation |
-| `queue.cancel` | Annuler la recherche |
-| `session.next` | Fermer la session et relancer la recherche |
-| `session.leave` | Fermer la session sans rechercher |
-| `rtc.offer` / `rtc.answer` | Transmettre une description SDP au pair uniquement |
-| `rtc.ice` | Transmettre un candidat ICE au pair uniquement |
-| `chat.send` | Envoyer un message texte |
-| `report.create` | Signaler (et éventuellement bloquer) l'interlocuteur |
-| `block.create` | Bloquer l'interlocuteur |
+| `queue.join` | Request a match |
+| `queue.cancel` | Cancel the search |
+| `session.next` | Close the session and search again |
+| `session.leave` | Close the session without searching |
+| `rtc.offer` / `rtc.answer` | Forward an SDP description to the peer only |
+| `rtc.ice` | Forward an ICE candidate to the peer only |
+| `chat.send` | Send a text message |
+| `report.create` | Report (and optionally block) the peer |
+| `block.create` | Block the peer |
 
-### Serveur → client
+### Server → client
 
-| Événement | Rôle |
+| Event | Role |
 | --- | --- |
-| `server.hello` | Identifiant, version de protocole, serveurs ICE, limites |
-| `queue.waiting` / `queue.canceled` / `queue.timeout` | État de la file d'attente |
-| `match.found` | Session créée, avec le rôle (`offerer` / `answerer`) |
-| `session.ended` | Fin de session avec le motif |
-| `session.state` | État courant (`idle`, `waiting`, …) |
-| `chat.message` / `chat.ack` | Message reçu / accusé d'envoi |
+| `server.hello` | Client id, protocol version, ICE servers, limits |
+| `queue.waiting` / `queue.canceled` / `queue.timeout` | Queue state |
+| `match.found` | Session created, with the role (`offerer` / `answerer`) |
+| `session.ended` | Session end with the reason |
+| `session.state` | Current state (`idle`, `waiting`, …) |
+| `chat.message` / `chat.ack` | Message received / send acknowledgement |
 | `report.ack` / `block.ack` | Confirmation |
-| `server.error` | Erreur de protocole (`code` stable, message français) |
+| `server.error` | Protocol error (stable `code`, English message) |
 
-### Règles appliquées côté serveur
+### Rules enforced server-side
 
-1. Seuls les événements de la liste sont acceptés ; tout le reste est rejeté explicitement.
-2. La signalisation n'est relayée que si l'émetteur et le destinataire sont **le même
-   couple de la même session active**. Un client ne peut jamais adresser une autre session.
-3. Taille bornée : enveloppe (64 Ko par défaut), SDP (100 Ko), candidat ICE (2 Ko),
-   message de chat (1000 caractères), signalement (500 + 2000 caractères).
-4. `rtc.offer` doit porter `type: "offer"` et `rtc.answer` `type: "answer"` : aucun blob
-   arbitraire n'est retransmis.
-5. Chaque famille d'événements a son propre seau à jetons par utilisateur
-   (`queue.join`, `chat.send`, `report.create`, signalisation).
-6. Une écriture concurrente par connexion : chaque socket a une unique goroutine
-   d'écriture alimentée par un canal tamponné. Un client trop lent est déconnecté plutôt
-   que de bloquer le serveur.
+1. Only listed events are accepted; everything else is explicitly rejected.
+2. Signaling is relayed only when sender and recipient are the **same pair of
+   the same active session**. A client can never reach another session.
+3. Bounded sizes: envelope (64 KB by default), SDP (100 KB), ICE candidate
+   (2 KB), chat message (1000 characters), report (500 + 2000 characters).
+4. `rtc.offer` must carry `type: "offer"` and `rtc.answer` `type: "answer"`:
+   no arbitrary blob is forwarded.
+5. Each event family has its own per-user token bucket (`queue.join`,
+   `chat.send`, `report.create`, signaling).
+6. One writer goroutine per connection: each socket has a single writer fed
+   by a buffered channel. A slow client is disconnected instead of blocking
+   the server.
 
 ---
 
-## 6. Structure du projet
+## 6. Project layout
 
-```
+```text
 random-chat/
-├── cmd/api/main.go              # composition de l'application, arrêt gracieux
+├── cmd/api/main.go              # app wiring, graceful shutdown
 ├── internal/
-│   ├── config/                  # configuration par variables d'environnement
-│   ├── httpapi/                 # routes REST, middlewares, admin, service du SPA
-│   ├── matching/                # état, file d'attente, moteur de mise en relation
-│   ├── metrics/                 # compteurs et histogrammes (format Prometheus)
-│   ├── moderation/              # limites de débit, signalements, blocages, suspensions
-│   ├── sessions/                # cycle de vie des sessions, identifiants aléatoires
-│   ├── signaling/               # protocole, connexions WebSocket, routage des événements
-│   └── storage/                 # port de persistance : mémoire et PostgreSQL
-├── migrations/                  # schéma SQL idempotent
-├── web/                         # application React (Vite + TypeScript)
+│   ├── config/                  # environment-based configuration
+│   ├── httpapi/                 # REST routes, middlewares, admin, SPA serving
+│   ├── matching/                # state, queue, matching engine
+│   ├── metrics/                 # counters and histograms (Prometheus format)
+│   ├── moderation/              # rate limits, reports, blocks, suspensions
+│   ├── sessions/                # session lifecycle, random identifiers
+│   ├── signaling/               # protocol, WebSocket connections, event routing
+│   └── storage/                 # persistence port: memory and PostgreSQL
+├── migrations/                  # idempotent SQL schema
+├── web/                         # React app (Vite + TypeScript)
 │   └── src/
-│       ├── components/          # interface
-│       ├── hooks/useRandomChat  # machine à états de la session
-│       ├── lib/                 # client de signalisation, enveloppe WebRTC
-│       ├── styles/              # thème sombre, design system
-│       └── types.ts             # contrat de protocole partagé
+│       ├── components/          # UI
+│       ├── hooks/useRandomChat  # session state machine
+│       ├── lib/                 # signaling client, WebRTC wrapper
+│       ├── styles/              # dark theme, design system
+│       └── types.ts             # shared protocol contract
 ├── deploy/
-│   ├── Dockerfile               # image unique : SPA + binaire
+│   ├── Dockerfile               # single image: SPA + binary
 │   ├── compose.yaml             # API + PostgreSQL + coturn
 │   └── coturn/turnserver.conf
 ├── Makefile
 └── .env.example
 ```
 
-### Invariants du backend
+### Backend invariants
 
-- **Une connexion = un propriétaire d'écriture.** Aucune écriture concurrente possible.
-- **Un participant = au plus une session active**, garanti par le verrou du moteur de
-  matching et par la table `byPeer` du gestionnaire de sessions.
-- **Identifiants imprévisibles** : 128 bits aléatoires (`crypto/rand`) pour les sessions.
-- **Toute session terminée libère ses ressources** et sort ses participants de la file.
-- **Rien venant du navigateur n'est fiable** : taille, type d'événement, état de session,
-  appartenance au couple, tout est revérifié.
+- **One connection = one writer owner.** No concurrent writes possible.
+- **One participant = at most one active session**, guaranteed by the
+  matching-engine lock and the session manager `byPeer` table.
+- **Unpredictable identifiers**: 128 random bits (`crypto/rand`) for sessions.
+- **Every ended session frees its resources** and removes its participants
+  from the queue.
+- **Nothing from the browser is trusted**: size, event type, session state,
+  pair membership — everything is rechecked.
 
 ---
 
 ## 7. Tests
 
 ```bash
-make test         # suite complète
-make test-race    # avec le détecteur de courses
-make check        # vet + tests + typecheck TypeScript
+make test         # full suite
+make test-race    # with the race detector
+make check        # vet + tests + TypeScript typecheck
 ```
 
-Couverture fonctionnelle des tests :
+Functional test coverage:
 
-- **Matching** : appariement, non-appariement des utilisateurs bloqués, annulation,
-  expiration, et surtout `TestConcurrentJoinsNeverDoubleAssign` qui lance 200 connexions
-  simultanées et vérifie qu'aucune session ne contient autre chose que deux pairs.
-- **WebSocket (bout en bout, sur un vrai serveur `httptest`)** : `match.found` symétrique,
-  relais SDP/ICE/chat, `Suivant` qui libère le partenaire, déconnexion qui ferme la session,
-  signalement, rejet des trames invalides et des événements inconnus, cohérence de la file
-  après un « suivant » massif.
-- **Modération** : seaux à jetons, indépendance des clés, nettoyage, escalade des
-  violations vers une suspension d'IP, symétrie des blocages.
-- **Stockage mémoire** : collections bornées, et surtout qu'une **suspension n'est jamais
-  évincée** (une sanction perdue remettrait un abuseur dans la file).
+- **Matching**: pairing, blocked users never paired, cancel, expiry, and most
+  importantly `TestConcurrentJoinsNeverDoubleAssign`, which fires 200
+  simultaneous joins and checks that no session holds anything but two peers.
+- **WebSocket (end to end, on a real `httptest` server)**: symmetric
+  `match.found`, SDP/ICE/chat relay, Next freeing the partner, disconnect
+  closing the session, reporting, rejection of invalid frames and unknown
+  events, queue consistency after a mass Next.
+- **Moderation**: token buckets, key independence, cleanup, violation
+  escalation to IP suspension, block symmetry.
+- **Memory storage**: bounded collections, and most importantly that a
+  **suspension is never evicted** (a lost sanction would let an abuser back
+  into the queue).
 
-### Contrôle de mise en page
+### Layout check
 
 ```bash
-make dev-api                       # dans un terminal
-cd web && npm run check:layout     # dans un autre
+make dev-api                       # in one terminal
+cd web && npm run check:layout     # in another
 ```
 
-Le script lance deux instances Chrome headless avec une caméra synthétique, provoque une
-vraie mise en relation entre elles, puis mesure la mise en page à six largeurs d'écran
-(1440, 1180, 834, 390, 320 et paysage 740×360). Il vérifie que la page ne défile pas, que
-la barre de contrôle ne recouvre pas la vidéo, que la vignette « Vous » reste dans le cadre
-et qu'aucun élément ne masque le champ de saisie du chat. Les captures sont écrites dans
-`web/.layout-shots/`.
+The script launches two headless Chrome instances with a synthetic camera,
+forces a real match between them, then measures the layout at six viewport
+widths (1440, 1180, 834, 390, 320 and 740×360 landscape). It checks that the
+page does not scroll, that the control bar never covers the video, that the
+"You" thumbnail stays in frame, and that nothing hides the chat input.
+Screenshots go to `web/.layout-shots/`.
 
-Il existe parce qu'un simple coup d'œil ne suffit pas : la première version de l'interface
-faisait passer la barre de contrôle sur **trois lignes** à 1180×700 — un élément en
-`position: fixed` avec `left: 50%` mais sans `width` voit sa largeur plafonnée à la moitié
-de l'écran. Aucune relecture du CSS ne l'avait révélé ; les mesures, si.
+It exists because eyeballing is not enough: the first UI version wrapped the
+control bar over **three lines** at 1180×700 — a `position: fixed` element
+with `left: 50%` but no `width` gets its width capped at half the screen. No
+CSS review caught it; measurements did.
 
 ---
 
-## 8. Administration et modération
+## 8. Administration and moderation
 
-Activez l'API avec `ADMIN_TOKEN`. Toutes les routes exigent
-`Authorization: Bearer <token>` (comparaison à temps constant) ; sans jeton configuré,
-elles répondent 404.
+Enable the API with `ADMIN_TOKEN`. Every route requires
+`Authorization: Bearer <token>` (constant-time comparison); without a
+configured token they return 404.
 
 ```bash
 TOKEN=... ; HOST=http://localhost:8080
@@ -292,80 +295,81 @@ curl -H "Authorization: Bearer $TOKEN" "$HOST/api/admin/reports?status=open&limi
 curl -H "Authorization: Bearer $TOKEN" -X POST $HOST/api/admin/reports/<id>/status \
      -d '{"status":"actioned"}'
 curl -H "Authorization: Bearer $TOKEN" -X POST $HOST/api/admin/users/<id>/suspend \
-     -d '{"duration_minutes":1440,"reason":"nudité"}'
-curl -H "Authorization: Bearer $TOKEN" $HOST/api/admin/actions     # journal d'audit
+     -d '{"duration_minutes":1440,"reason":"nudity"}'
+curl -H "Authorization: Bearer $TOKEN" $HOST/api/admin/actions     # audit log
 ```
 
-Automatismes en place :
+Built-in automation:
 
-- `AUTO_SUSPEND_AFTER` signalements distincts sur une même cible ⇒ suspension automatique.
-- Violations répétées des limites de débit ⇒ suspension de l'IP sur `SUSPEND_DURATION`.
-- Blocage ⇒ plus jamais appariés (vérifié par le moteur, pas par le client).
-- Toute session signalée est fermée immédiatement et son motif est journalisé.
+- `AUTO_SUSPEND_AFTER` distinct reports on the same target ⇒ automatic
+  suspension.
+- Repeated rate-limit violations ⇒ IP suspension for `SUSPEND_DURATION`.
+- Block ⇒ never paired again (enforced by the engine, not the client).
+- Every reported session is closed immediately and its reason is logged.
 
-### Protection des mineurs
+### Minor safety
 
-Un écran de consentement bloque l'accès caméra avant toute mise en relation : l'utilisateur
-confirme être majeur et accepter les règles. Le bouton « Signaler » propose une catégorie
-dédiée (`minor`). **Ce n'est qu'une barrière d'entrée** : une mise en production réelle
-exige une vérification d'âge, une politique de conservation des données et une astreinte
-de modération humaine.
+A consent screen blocks camera access before any match: the user confirms
+being an adult and accepting the rules. The Report button offers a dedicated
+(`minor`) category. **This is only an entry barrier**: a real production
+launch needs age verification, a data-retention policy, and human moderation
+coverage.
 
 ---
 
-## 9. Observabilité
+## 9. Observability
 
 | Endpoint | Usage |
 | --- | --- |
-| `GET /api/health` | Sonde de vivacité (connexions, sessions, file) |
-| `GET /api/stats` | Compteurs agrégés publics, utilisés par la page d'accueil |
-| `GET /metrics` | Format Prometheus, sans authentification |
+| `GET /api/health` | Liveness probe (connections, sessions, queue) |
+| `GET /api/stats` | Public aggregate counters, used by the home page |
+| `GET /metrics` | Prometheus format, no authentication |
 
-Indicateurs à surveiller en priorité (voir §8 du plan) :
+Indicators to watch first:
 
-- **Matching** : `randomchat_match_wait_p95_ms` — le temps d'attente est le premier motif
-  d'abandon.
-- **Signalisation** : `randomchat_connections_active`, latence de routage.
-- **Media** : taux de connexions `relay` face à `host`/`srflx` ; une part élevée de relais
-  signifie un coût TURN élevé. La qualité affichée dans l'interface provient de
-  `RTCPeerConnection.getStats()` (RTT, jitter, pertes, débit, type de candidat).
-- **Sécurité** : `randomchat_reports_total`, `randomchat_violations_total`,
+- **Matching**: `randomchat_match_wait_p95_ms` — wait time is the top churn
+  driver.
+- **Signaling**: `randomchat_connections_active`, routing latency.
+- **Media**: `relay` vs `host`/`srflx` connection ratio; a high relay share
+  means high TURN cost. The quality shown in the UI comes from
+  `RTCPeerConnection.getStats()` (RTT, jitter, loss, bitrate, candidate
+  type).
+- **Safety**: `randomchat_reports_total`, `randomchat_violations_total`,
   `randomchat_suspensions_total`.
 
 ---
 
-## 10. Feuille de route
+## 10. Roadmap
 
-Correspondance avec les phases du plan d'implémentation :
-
-| Phase | Contenu | État |
+| Phase | Content | Status |
 | --- | --- | --- |
-| 01 — Fondations | Dépôt, configuration, Docker, interfaces API/WS | ✅ |
-| 02 — Moteur de mise en relation | États, file concurrente, `Suivant`, expirations | ✅ |
-| 03 — Appel vidéo WebRTC | SDP/ICE, STUN/TURN, reprise réseau, libération des pistes | ✅ |
-| 04 — Interface | Accueil, scène d'appel, chat, responsive | ✅ |
-| 05 — Sécurité et administration | Signalements, blocages, limites, suspensions, audit | ✅ |
-| 06 — Tests, optimisation, déploiement | Tests de charge, métriques, pilote | 🔶 base posée, à instrumenter en réel |
+| 01 — Foundations | Repo, config, Docker, API/WS interfaces | ✅ |
+| 02 — Matching engine | States, concurrent queue, Next, expiries | ✅ |
+| 03 — WebRTC calls | SDP/ICE, STUN/TURN, network recovery, track cleanup | ✅ |
+| 04 — Interface | Home, call scene, chat, responsive | ✅ |
+| 05 — Safety and admin | Reports, blocks, limits, suspensions, audit | ✅ |
+| 06 — Tests, tuning, deploy | Load tests, metrics, pilot | 🔶 base done, needs real-world instrumentation |
 
-### Étapes suivantes naturelles
+### Natural next steps
 
-1. **Redis** pour la file d'attente et les sessions, afin d'autoriser plusieurs instances Go
-   (l'interface `sessions.Store` et la file sont déjà isolées).
-2. **Identifiants TURN éphémères** (HMAC avec expiration) servis par `/api/config`.
-3. **Vérification d'âge** et politique de conservation des données par juridiction.
-4. **SFU (LiveKit)** si le produit évolue vers du multi-participants ou de l'enregistrement.
-5. **Tests de charge** sur le matching et les WebSockets avant d'annoncer un chiffre de
-   capacité — un serveur vidéo coûte d'abord en bande passante TURN, pas en CPU Go.
+1. **Redis** for the queue and sessions, to allow several Go instances
+   (the `sessions.Store` interface and the queue are already isolated).
+2. **Ephemeral TURN credentials** (HMAC with expiry) served by `/api/config`.
+3. **Age verification** and per-jurisdiction data-retention policy.
+4. **SFU (LiveKit)** if the product moves to multi-party or recording.
+5. **Load tests** on matching and WebSockets before announcing any capacity
+   number — a video server costs TURN bandwidth first, not Go CPU.
 
 ---
 
-## 11. Limites connues
+## 11. Known limitations
 
-- **Le blocage est lié au `cid` du navigateur**, effaçable en vidant le stockage local.
-  Le passage à un compte léger (e-mail ou OAuth) est la seule vraie parade.
-- **Le SPA et l'API partagent une seule image** : simple à opérer, à séparer (CDN) si le
-  trafic statique devient significatif.
-- **Pas de reprise de session après rechargement** : la session WebRTC est perdue, il faut
-  relancer une recherche.
-- **Le chat n'est pas modéré automatiquement.** Les messages transitent sans être stockés ;
-  seuls les signalements sont persistés.
+- **Blocking is tied to the browser `cid`**, which is cleared with local
+  storage. A lightweight account (email or OAuth) is the only real fix.
+- **The SPA and the API share one image**: simple to operate; split (CDN) if
+  static traffic grows.
+- **No session resume after reload**: the WebRTC session is lost, a new
+  search is required.
+- **Chat is not auto-moderated.** Messages pass through without being stored;
+  only reports are persisted.
+
