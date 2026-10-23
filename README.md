@@ -1,5 +1,10 @@
 # RandomChat — Random Video Chat
 
+[![Live demo](https://img.shields.io/badge/%E2%96%B6_Live_demo-rchat.blocsland.com-5865F2?style=for-the-badge)](https://rchat.blocsland.com)
+
+**Try it now → [rchat.blocsland.com](https://rchat.blocsland.com)** — open it in two tabs or two
+browsers to match with yourself and see a full session.
+
 Random one-to-one video chat in the spirit of Omegle: open the page, allow the
 camera, get matched with someone available, talk, then click Next.
 
