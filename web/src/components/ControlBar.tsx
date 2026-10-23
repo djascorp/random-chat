@@ -108,7 +108,7 @@ export function ControlBar({
       <div className="controls__group">
         <button
           type="button"
-          className={`ctl ${micEnabled ? '' : 'ctl--off'}`}
+          className={`ctl ctl--mic ${micEnabled ? '' : 'ctl--off'}`}
           onClick={onToggleMic}
           aria-pressed={!micEnabled}
           aria-label={micEnabled ? t('ctl.mic.off') : t('ctl.mic.on')}
@@ -120,7 +120,7 @@ export function ControlBar({
 
         <button
           type="button"
-          className={`ctl ${camEnabled ? '' : 'ctl--off'}`}
+          className={`ctl ctl--cam ${camEnabled ? '' : 'ctl--off'}`}
           onClick={onToggleCam}
           aria-pressed={!camEnabled}
           aria-label={camEnabled ? t('ctl.cam.off') : t('ctl.cam.on')}
@@ -145,7 +145,7 @@ export function ControlBar({
       <div className="controls__group controls__group--primary">
         <button
           type="button"
-          className="ctl ctl--primary"
+          className="ctl ctl--primary ctl--next"
           onClick={onNext}
           aria-label={t('ctl.next')}
           title={t("ctl.next")}
@@ -155,7 +155,7 @@ export function ControlBar({
         </button>
         <button
           type="button"
-          className="ctl"
+          className="ctl ctl--add"
           onClick={onAdd}
           disabled={!canAdd}
           aria-label={canAdd ? t('ctl.add') : t('ctl.add.full')}
@@ -166,7 +166,7 @@ export function ControlBar({
         </button>
         <button
           type="button"
-          className="ctl"
+          className="ctl ctl--invite"
           onClick={onInvite}
           aria-label={t('ctl.invite')}
           title={t("ctl.invite")}
@@ -176,7 +176,7 @@ export function ControlBar({
         </button>
         <button
           type="button"
-          className="ctl ctl--danger"
+          className="ctl ctl--danger ctl--hang"
           onClick={onStop}
           aria-label={t('ctl.stop')}
           title={t("ctl.stop")}
@@ -187,10 +187,10 @@ export function ControlBar({
       </div>
 
       <div className="controls__group">
-        <div className="vol">
+        <div className="vol vol--volume">
           <button
             type="button"
-            className={`ctl ${volume === 0 ? 'ctl--muted' : ''}`}
+            className={`ctl ctl--volume ${volume === 0 ? 'ctl--muted' : ''}`}
             onClick={() => setVolumeOpen((open) => !open)}
             aria-expanded={volumeOpen}
             aria-label={t('ctl.volume')}
@@ -220,7 +220,7 @@ export function ControlBar({
 
         <button
           type="button"
-          className={`ctl ${chatOpen ? 'ctl--active' : ''}`}
+          className={`ctl ctl--chat ${chatOpen ? 'ctl--active' : ''}`}
           onClick={onToggleChat}
           aria-label={t('ctl.chat')}
           title={t("ctl.chat")}

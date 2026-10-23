@@ -872,6 +872,39 @@ input {
   }
 }
 
+/* A phone packs the status line: the raw throughput and round-trip pills are
+   desktop diagnostics, so they are dropped and the remaining pills shrink to
+   keep the HUD to a single compact row over the video. The top bar loses a
+   little padding for the same reason — every pixel it gives back goes to the
+   video. */
+@media (max-width: 560px) {
+  .stage__hud {
+    top: 8px;
+    left: 8px;
+    gap: 6px;
+    max-width: calc(100% - 16px);
+  }
+
+  .stage__hud .pill {
+    padding: 5px 9px;
+    gap: 5px;
+    font-size: 11.5px;
+  }
+
+  .stage__hud .pill--detail {
+    display: none;
+  }
+
+  .stage__hud-scrim {
+    height: 60px;
+  }
+
+  .topbar {
+    padding: 10px 14px;
+    gap: 10px;
+  }
+}
+
 /* A landscape phone leaves little height for the video, so the chrome around it
    shrinks rather than pushing the page into a scroll. */
 @media (max-height: 560px) {

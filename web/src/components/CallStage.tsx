@@ -304,6 +304,7 @@ export function CallStage({
           stream={mainPeerStream}
           className="stage__video"
           volume={volume}
+          mirrored
           elementRef={(element) => {
             mainVideoRef.current = element;
           }}
@@ -348,6 +349,7 @@ export function CallStage({
       stream={inCall && !lone ? mainSoloStream : null}
       className="stage__video"
       volume={volume}
+      mirrored
       elementRef={(element) => {
         mainVideoRef.current = element;
       }}
@@ -415,6 +417,7 @@ export function CallStage({
                     stream={peer.stream}
                     className={`tile__video ${speaking[peer.id] ? 'is-speaking-glow' : ''}`}
                     volume={volume}
+                    mirrored
                     label={t('stage.participant', { n: index + 2 })}
                   />
                 ) : (
@@ -457,6 +460,7 @@ export function CallStage({
                     stream={peer.stream}
                     className="tile__video"
                     volume={volume}
+                    mirrored
                     label={peerLabel(peer)}
                   />
                 ) : (
@@ -546,7 +550,7 @@ export function CallStage({
                   {membersCount}{sessionMax > 0 ? `/${sessionMax}` : ''}
                 </span>
               ) : null}
-              <span className={`pill pill--${connection.tone}`} title={qualityHint}>
+              <span className={`pill pill--detail pill--${connection.tone}`} title={qualityHint}>
                 {connection.label}
               </span>
             </>
@@ -555,7 +559,7 @@ export function CallStage({
           quality?.bitrateKbps !== undefined &&
           inCall &&
           !isGroup ? (
-            <span className="pill pill--mono" title={t('stage.bitrate')}>
+            <span className="pill pill--mono pill--detail" title={t('stage.bitrate')}>
               {quality.bitrateKbps} kbps
             </span>
           ) : null}
@@ -593,6 +597,7 @@ export function CallStage({
                   stream={remotePeers[0].stream}
                   className="stage__local-video"
                   volume={volume}
+                  mirrored
                   label={t('stage.remoteVideo')}
                 />
               ) : (

@@ -139,7 +139,7 @@ export function SearchPrefsMenu({ mode, max, onChange }: SearchPrefsMenuProps) {
   };
 
   return (
-    <div className="device-menu" ref={containerRef}>
+    <div className="device-menu device-menu--prefs" ref={containerRef}>
       <button
         type="button"
         className={`ctl ${open ? 'ctl--active' : ''}`}

@@ -1593,3 +1593,56 @@
   background: var(--surface-strong);
   color: var(--text);
 }
+
+/* =========================================================================
+   Phone control bar (≤560px): two tidy rows instead of three.
+   The call actions fill the first row (mic, camera, next, add, invite,
+   hang-up) and the secondary actions the second (devices, search shape,
+   volume, chat, more). The groups are flattened with `display: contents` so
+   the buttons can be ordered across the group boundaries, and a six-column
+   grid fixes the 6 + 5 row break deterministically. A shorter bar is what
+   gives the video back its vertical space on a phone.
+   ========================================================================= */
+@media (max-width: 560px) {
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 6px;
+    padding: 10px;
+  }
+
+  /* The groups are layout ghosts on a phone: their buttons become grid items
+     of the bar itself, which is what lets them be reordered across groups. */
+  .controls__group {
+    display: contents;
+  }
+
+  /* Row 1 — the call itself. */
+  .ctl--mic { order: 1; }
+  .ctl--cam { order: 2; }
+  .ctl--next { order: 3; }
+  .ctl--add { order: 4; }
+  .ctl--invite { order: 5; }
+  .ctl--hang { order: 6; }
+
+  /* Row 2 — devices, search shape and secondary actions. */
+  .device-menu--devices { order: 7; }
+  .device-menu--prefs { order: 8; }
+  .vol--volume { order: 9; }
+  .ctl--chat { order: 10; }
+  .device-menu--more { order: 11; }
+
+  /* Equal cells: the popover wrappers stretch and their buttons fill the cell
+     so every control is the same size and lands cleanly on the grid. */
+  .controls .device-menu,
+  .controls .vol {
+    min-width: 0;
+  }
+  .controls .ctl,
+  .controls .device-menu .ctl,
+  .controls .vol .ctl {
+    width: 100%;
+    height: 54px;
+    min-width: 0;
+  }
+}

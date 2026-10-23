@@ -44,7 +44,7 @@ export function DeviceMenu({
   const hasDevices = cameras.length > 0 || microphones.length > 0;
 
   return (
-    <div className="device-menu" ref={containerRef}>
+    <div className="device-menu device-menu--devices" ref={containerRef}>
       <button
         type="button"
         className={`ctl ${open ? 'ctl--active' : ''}`}

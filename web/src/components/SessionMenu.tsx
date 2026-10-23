@@ -67,7 +67,7 @@ export function SessionMenu({ inCall, sessionMax, onReport, onBlock, onInvite, o
   };
 
   return (
-    <div className="device-menu" ref={containerRef}>
+    <div className="device-menu device-menu--more" ref={containerRef}>
       <button
         type="button"
         className={`ctl ${open ? 'ctl--active' : ''}`}
