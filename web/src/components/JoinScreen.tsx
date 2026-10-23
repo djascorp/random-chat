@@ -81,7 +81,11 @@ export function JoinScreen({ token, status, joinError, onJoin, onBack }: JoinScr
               {state.preview.max_participants === 0
                 ? t('join.maxUnlimited')
                 : t('join.max', { n: state.preview.max_participants })}
-              {state.preview.mode === 'solo' ? ` · ${t('join.solo.hint')}` : null}
+              {state.preview.members <= 1
+                ? ` · ${t('join.hostWaiting')}`
+                : state.preview.mode === 'solo'
+                  ? ` · ${t('join.solo.hint')}`
+                  : ''}
             </p>
 
             {joinError ? (

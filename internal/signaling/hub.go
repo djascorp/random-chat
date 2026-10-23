@@ -410,17 +410,15 @@ func (h *Hub) handleAdd(c *Client, env Envelope) {
 }
 
 // handleInviteCreate mints (or returns) the single active invitation link of
-// the caller's session. A supplied cap is applied to the session first.
+// the caller's session. A supplied cap is applied to the session first. When
+// the caller has no session yet — idle, or still waiting in the random queue
+// — it opens an empty hosted room instead: the link then fills a discussion
+// that does not exist yet, and the host's own search preferences are left
+// untouched for later searches.
 func (h *Hub) handleInviteCreate(c *Client, env Envelope) {
 	if !h.inviteLimiter.Allow(c.id) {
 		h.penalize(c, env.Event)
 		c.SendError("rate_limited", "trop d'invitations en peu de temps", env.Event)
-		return
-	}
-	sessionID := c.SessionID()
-	s, ok := h.sessions.Get(sessionID)
-	if !ok || !s.Has(c.id) {
-		c.SendError("no_session", "aucune session active", env.Event)
 		return
 	}
 	payload, err := decodeData[InviteCreatePayload](env)
@@ -435,7 +433,35 @@ func (h *Hub) handleInviteCreate(c *Client, env Envelope) {
 			c.SendError("invalid_limit", "le nombre maximal doit valoir 0 (sans contrainte) ou au moins 2", env.Event)
 			return
 		}
-		if h.sessions.SetMax(s.ID, max) {
+	}
+	sessionID := c.SessionID()
+	s, ok := h.sessions.Get(sessionID)
+	if !ok {
+		// No live session: open an empty room for the link to fill. Waiting
+		// callers leave the queue first; a stale in-call state is refused.
+		// A valid mode in the payload carries the host's landing choice even
+		// before their first search; anything else keeps the server prefs.
+		if mode := strings.ToLower(strings.TrimSpace(payload.Mode)); mode == storage.SessionSolo || mode == storage.SessionGroup {
+			max := c.MaxParticipants()
+			if mode == storage.SessionSolo {
+				max = 0
+			}
+			c.SetSearchPrefs(mode, max)
+		}
+		if c.State() == matching.StateWaiting {
+			h.matcher.Cancel(c)
+		}
+		s, ok = h.matcher.OpenRoom(c)
+		if !ok {
+			c.SendError("no_session", "impossible d'ouvrir une salle depuis cet état", env.Event)
+			return
+		}
+	} else if !s.Has(c.id) {
+		c.SendError("no_session", "aucune session active", env.Event)
+		return
+	}
+	if payload.MaxParticipants != nil {
+		if h.sessions.SetMax(s.ID, *payload.MaxParticipants) {
 			if fresh, ok := h.sessions.Get(s.ID); ok {
 				s = fresh
 			}

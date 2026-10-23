@@ -229,9 +229,10 @@ func (m *Matcher) JoinSession(p Peer, sessionID string) JoinResult {
 		return JoinResult{Err: JoinBlocked}
 	}
 	var promoted bool
-	if s.Mode == soloMode {
-		// Promote before the room check: a solo room is born full, and the
-		// promotion lifts the 1:1 cap.
+	if s.Mode == soloMode && !s.Fits(1, p.MaxParticipants()) {
+		// Promote before the room check, and only when the room is full: a
+		// pair (2/2) grows into a conference, while an empty hosted room
+		// (1/2) keeps its solo shape and simply takes the invitee in.
 		if !m.sessions.Promote(s.ID) {
 			return JoinResult{Err: JoinNoSession}
 		}
@@ -240,13 +241,46 @@ func (m *Matcher) JoinSession(p Peer, sessionID string) JoinResult {
 			s = fresh
 		}
 		m.announceUpdatedLocked(s)
-		members = s.Members()
 	}
+	members = s.Members()
 	if !s.Fits(1, p.MaxParticipants()) {
 		return JoinResult{Err: JoinSessionFull}
 	}
 	m.joinSessionLocked(s.ID, p)
 	return JoinResult{Session: s, Members: members, Promoted: promoted}
+}
+
+// OpenRoom creates an empty session owned by p: an invitation link minted
+// before anyone has matched. A solo room holds the host plus exactly one
+// invitee (cap 2); a group room starts uncapped or with the host's cap. The
+// host is bound and in-call from now on, so the link's first join flows
+// through the same late-joiner path as any other arrival. It fails when p is
+// not idle — a caller still bound to another room must leave it first.
+func (m *Matcher) OpenRoom(p Peer) (*storage.Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if p.State() != StateIdle {
+		return nil, false
+	}
+	mode := p.Mode()
+	if mode != groupMode {
+		mode = soloMode
+	}
+	roomCap := 0
+	if mode == soloMode {
+		roomCap = 2
+	} else if wanted := p.MaxParticipants(); wanted >= 2 {
+		roomCap = wanted
+	}
+	s := m.sessions.Create([]string{p.ID()}, mode, roomCap)
+	p.Bind("", s.ID)
+	p.SetState(StateInCall)
+	m.live[p.ID()] = p
+	if m.log != nil {
+		m.log.Info("empty room opened", "session_id", s.ID, "peer", p.ID(), "mode", mode, "max", roomCap)
+	}
+	return s, true
 }
 
 // announceUpdatedLocked tells the live members that their room changed shape
@@ -261,8 +295,11 @@ func (m *Matcher) announceUpdatedLocked(s *storage.Session) {
 }
 
 // joinSessionLocked moves a waiter into a live session and notifies everyone:
-// the newcomer gets the full member list so it can offer to each of them, and
-// every existing member learns who arrived so it waits for that offer.
+// the newcomer gets the full member list and the "joiner" role so it offers to
+// every one of them, and every existing member learns who arrived so it waits
+// for that offer. The role matters: veterans must never offer (they would
+// glare with each other), and the joiner cannot rely on the identifier-order
+// rule — with the highest id nobody would ever negotiate.
 func (m *Matcher) joinSessionLocked(sessionID string, p Peer) {
 	m.queue.Remove(p.ID())
 	s, added := m.sessions.AddMember(sessionID, p.ID())
@@ -275,7 +312,7 @@ func (m *Matcher) joinSessionLocked(sessionID string, p Peer) {
 
 	wait := m.takeWait(p)
 	members := s.Members()
-	p.Send("match.found", matchFoundPayload(s, members, "", "", time.Now()))
+	p.Send("match.found", matchFoundPayload(s, members, "", "joiner", time.Now()))
 	for _, id := range members {
 		if id == p.ID() {
 			continue

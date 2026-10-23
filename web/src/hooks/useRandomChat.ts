@@ -90,6 +90,10 @@ export function useRandomChat() {
   const connectedRef = useRef(new Set<string>());
   const localStreamRef = useRef<MediaStream | null>(null);
   const sessionRef = useRef<string>('');
+  // True while owning an empty hosted room: the invite link exists but the
+  // host has no match.found of its own, so sessionRef is still empty until
+  // the first invitee triggers peer.joined.
+  const hostingRef = useRef(false);
   const myIdRef = useRef('');
   const sessionModeRef = useRef<SessionMode>('solo');
   const prefsRef = useRef<{ mode: SessionMode; max: number }>({ mode: 'solo', max: 0 });
@@ -155,6 +159,7 @@ export function useRandomChat() {
     peersRef.current.clear();
     connectedRef.current.clear();
     sessionRef.current = '';
+    hostingRef.current = false;
     restartAttemptsRef.current = 0;
     setRemotePeers([]);
     setMembers([]);
@@ -450,6 +455,10 @@ export function useRandomChat() {
       return;
     }
     client.send(C2S.queueJoin, { mode: prefs.mode, max_participants: prefs.max });
+    // Leaving a hosted room for the random queue kills its link server-side;
+    // the dialog must never show it again.
+    setInvite(null);
+    setInviteRevoked(false);
     applyStatus('waiting', waitingText);
   }, [applyStatus, clearTimers, joinQueue, teardownAllPeers]);
 
@@ -607,26 +616,51 @@ export function useRandomChat() {
    * Asks the server for the session's invitation link. The answer arrives as
    * invite.created and lands in `invite`; an optional cap is applied to the
    * session first, and rotate revokes the previous link.
+   *
+   * With no live session — a chat that has nobody in it yet — this becomes
+   * the hosting flow: media and socket are set up first, then the server
+   * opens an empty room the link fills directly. The caller's own search
+   * preferences are only echoed to shape the room, never altered.
    */
   const createInvite = useCallback(
-    (max?: number, rotate = false) => {
-      const client = signalingRef.current;
-      if (!client?.isOpen || !sessionRef.current) {
-        pushToast('warn', t('toast.noSession.title'), t('toast.noSession.body'));
-        return;
+    async (max?: number, rotate = false) => {
+      let client = signalingRef.current;
+      if (!client?.isOpen || !localStreamRef.current) {
+        if (statusRef.current === 'idle') {
+          setError(null);
+          setMessages([]);
+          setUnread(0);
+          applyStatus('requesting-media', t('status.cameraPrompt'));
+        }
+        if (!(await acquireMedia())) return;
+        clearTimers();
+        try {
+          client = await ensureSignaling();
+        } catch (err) {
+          if (statusRef.current !== 'error') {
+            const message = err instanceof Error ? err.message : t('status.serverUnreachable');
+            setError(message);
+            applyStatus('error', message);
+          }
+          return;
+        }
       }
+      if (!client.isOpen) return;
       setInviteRevoked(false);
+      if (!sessionRef.current) hostingRef.current = true;
       client.send(
         C2S.inviteCreate,
-        max === undefined ? { rotate } : { max_participants: max, rotate },
+        max === undefined
+          ? { mode: prefsRef.current.mode, rotate }
+          : { mode: prefsRef.current.mode, max_participants: max, rotate },
       );
     },
-    [pushToast],
+    [acquireMedia, applyStatus, clearTimers, ensureSignaling],
   );
 
   const revokeInvite = useCallback(() => {
     const client = signalingRef.current;
-    if (!client?.isOpen || !sessionRef.current) return;
+    if (!client?.isOpen || (!sessionRef.current && !hostingRef.current)) return;
     client.send(C2S.inviteRevoke);
   }, []);
 
@@ -634,7 +668,7 @@ export function useRandomChat() {
   const updateSessionCap = useCallback(
     (max: number) => {
       const client = signalingRef.current;
-      if (!client?.isOpen || !sessionRef.current) {
+      if (!client?.isOpen || (!sessionRef.current && !hostingRef.current)) {
         pushToast('warn', t('toast.noSession.title'), t('toast.noSession.body'));
         return;
       }
@@ -705,6 +739,16 @@ export function useRandomChat() {
     onInviteCreated: (payload) => {
       setInviteRevoked(false);
       setInvite(payload);
+      // A hosted room: nobody matched, the host just waits for the link to
+      // be used. A member of a live session regenerating keeps its status.
+      if (
+        !sessionRef.current &&
+        (statusRef.current === 'idle' ||
+          statusRef.current === 'requesting-media' ||
+          statusRef.current === 'waiting')
+      ) {
+        applyStatus('waiting', t('invite.hosting'));
+      }
     },
 
     onInviteRevoked: () => {
@@ -715,7 +759,11 @@ export function useRandomChat() {
 
     onMatchFound: (payload) => {
       sessionRef.current = payload.session_id;
+      hostingRef.current = false;
       restartAttemptsRef.current = 0;
+      // A fresh session invalidates whatever link the previous one had.
+      setInvite(null);
+      setInviteRevoked(false);
       setJoinError(null);
       applySessionShape(payload.mode === 'group' ? 'group' : 'solo', payload.max_participants ?? 0);
       const others = (payload.peers ?? []).filter((id) => id !== myIdRef.current);
@@ -742,6 +790,11 @@ export function useRandomChat() {
       };
       if (payload.role === 'offerer' && payload.peer_id) {
         offerTo(payload.peer_id);
+      } else if (payload.role === 'joiner') {
+        // A late joiner (link join, Ajouter, hosted room): the veterans wait,
+        // so the joiner must offer to everyone. The identifier-order rule
+        // would stall forever when the joiner holds the highest id.
+        for (const peerId of others) offerTo(peerId);
       } else if (payload.role !== 'answerer') {
         for (const peerId of others) {
           if (myIdRef.current < peerId) offerTo(peerId);
@@ -775,6 +828,14 @@ export function useRandomChat() {
     },
 
     onPeerJoined: (payload) => {
+      // A hosted room's first arrival is the host's de facto match: the
+      // server only sends peer.joined, so the host learns the session here
+      // and moves from "waiting" to the negotiation display.
+      if (!sessionRef.current) {
+        sessionRef.current = payload.session_id;
+        hostingRef.current = false;
+        applyStatus('connecting', t('status.negotiating'));
+      }
       setMembers((previous) =>
         previous.includes(payload.peer_id) ? previous : [...previous, payload.peer_id],
       );

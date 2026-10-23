@@ -97,7 +97,6 @@ export default function App() {
   const membersCount = chat.members.length;
   // Ajouter works from any live session: a solo call is promoted on the way.
   const canAdd = inCall && (chat.sessionMax === 0 || membersCount < chat.sessionMax);
-  const inSession = membersCount > 0;
 
   const maxRunes = chat.hello?.limits.max_chat_runes ?? DEFAULT_MAX_RUNES;
   const turnConfigured =
@@ -141,10 +140,11 @@ export default function App() {
     }
   }, [chat]);
 
+  // Opening the dialog is enough: with no live session yet, the dialog's
+  // first request becomes the hosting flow (media, empty room, link).
   const openShare = useCallback(() => {
-    if (chat.members.length === 0) return;
     setShareOpen(true);
-  }, [chat.members.length]);
+  }, []);
 
   // Tiles in a conference act on one peer; the solo Plus menu acts on the
   // single other participant by default.
@@ -342,6 +342,7 @@ export default function App() {
             initialMax={preset.max}
             preset={preset.preset}
             onStart={handleStart}
+            onInvite={openShare}
             busy={false}
           />
         )}
@@ -402,7 +403,7 @@ export default function App() {
       />
 
       <ShareDialog
-        open={shareOpen && inSession}
+        open={shareOpen}
         invite={chat.invite}
         revoked={chat.inviteRevoked}
         sessionMax={chat.sessionMax}

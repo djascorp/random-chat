@@ -50,7 +50,7 @@ export interface MatchFound {
   mode: SessionMode;
   max_participants: number;
   peer_id?: string;
-  role?: 'offerer' | 'answerer';
+  role?: 'offerer' | 'answerer' | 'joiner';
   started_at: string;
 }
 

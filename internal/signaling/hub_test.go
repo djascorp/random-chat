@@ -1076,6 +1076,126 @@ func TestSessionEndsKillInvite(t *testing.T) {
 	awaitErrorCode(t, c, "invalid_token")
 }
 
+// TestInviteCreateFromIdleOpensRoom: a host with no session mints a link that
+// opens an empty solo room; the first joiner turns it into a normal 1:1 call
+// without any promotion, and the joiner — as every late arrival — carries the
+// "joiner" role so it offers to the waiting host.
+func TestInviteCreateFromIdleOpensRoom(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	host := dial(t, srv, "client-host000")
+	created := createInvite(t, host, InviteCreatePayload{Mode: "solo"})
+	if created.Mode != "solo" || created.MaxParticipants != 2 {
+		t.Fatalf("invite = %+v, want a solo room with a cap of 2", created)
+	}
+	if got := hub.sessions.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want the hosted room", got)
+	}
+
+	joiner := dial(t, srv, "client-zzzzzzzz")
+	joiner.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	joined := decodeMatch(t, joiner.await(EvtMatchFound, 2*time.Second))
+	ids := peerIDs(t, joined)
+	if len(ids) != 2 {
+		t.Fatalf("joiner sees %d peers, want the host and itself", len(ids))
+	}
+	if joined["role"] != "joiner" {
+		t.Fatalf("joiner role = %v, want joiner", joined["role"])
+	}
+
+	notice := host.await(EvtPeerJoined, 2*time.Second)
+	var peerPayload PeerJoinedPayload
+	mustDecode(t, notice.Data, &peerPayload)
+	if peerPayload.PeerID != joiner.userID {
+		t.Fatalf("host learned about %q, want %q", peerPayload.PeerID, joiner.userID)
+	}
+	// A solo room hosting its first invitee is a 1:1, not a promotion. The
+	// server announces a promotion strictly before peer.joined, so anything
+	// sent earlier is already sitting in the await buffer.
+	for _, env := range host.pending {
+		if env.Event == EvtSessionUpdated {
+			t.Fatal("host received session.updated: an empty solo room must not promote on its first join")
+		}
+	}
+
+	// Signaling crosses the link in both directions once connected.
+	joiner.send(EvtRTCOffer, SDPPayload{Type: "offer", SDP: "v=0", To: host.userID})
+	relayed := host.await(EvtRTCOffer, 2*time.Second)
+	var sdp SDPPayload
+	mustDecode(t, relayed.Data, &sdp)
+	if sdp.From != joiner.userID {
+		t.Fatalf("relayed offer from = %q, want %q", sdp.From, joiner.userID)
+	}
+	if got := hub.metrics.InviteJoins.Value(); got != 1 {
+		t.Fatalf("invite joins = %d, want 1", got)
+	}
+	if got := hub.metrics.SessionPromotions.Value(); got != 0 {
+		t.Fatalf("promotions = %d, want 0: joining an empty solo room is a 1:1", got)
+	}
+}
+
+// TestInviteCreateFromIdleGroupRoom: the host's shape travels with the room —
+// a group room honours its cap and refuses extra link joins with session_full.
+func TestInviteCreateFromIdleGroupRoom(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	host := dial(t, srv, "client-host000")
+	created := createInvite(t, host, InviteCreatePayload{Mode: "group", MaxParticipants: ptrInt(3)})
+	if created.Mode != "group" || created.MaxParticipants != 3 {
+		t.Fatalf("invite = %+v, want a group room capped at 3", created)
+	}
+
+	seat := func(cid string) {
+		t.Helper()
+		c := dial(t, srv, cid)
+		c.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+		decodeMatch(t, c.await(EvtMatchFound, 2*time.Second))
+		host.await(EvtPeerJoined, 2*time.Second)
+	}
+	seat("client-aaaaaa01")
+	seat("client-aaaaaa02")
+
+	late := dial(t, srv, "client-bbbbbb03")
+	late.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	awaitErrorCode(t, late, "session_full")
+}
+
+// TestInviteCreateWhileWaitingReplacesQueue: inviting while waiting in the
+// random queue pulls the caller out of it and into a hosted room.
+func TestInviteCreateWhileWaitingReplacesQueue(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	host := dial(t, srv, "client-host000")
+	host.send(EvtQueueJoin, nil)
+	host.await(EvtQueueWaiting, 2*time.Second)
+
+	created := createInvite(t, host, nil)
+	if got := hub.QueueLength(); got != 0 {
+		t.Fatalf("queue length = %d, want the host pulled out of it", got)
+	}
+
+	// The hosted room is real: a joiner lands with the host, not with the queue.
+	joiner := dial(t, srv, "client-zzzzzzzz")
+	joiner.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	decodeMatch(t, joiner.await(EvtMatchFound, 2*time.Second))
+	host.await(EvtPeerJoined, 2*time.Second)
+
+	searcher := dial(t, srv, "client-cccccccc")
+	searcher.send(EvtQueueJoin, nil)
+	searcher.await(EvtQueueWaiting, 2*time.Second)
+	if got := hub.QueueLength(); got != 1 {
+		t.Fatalf("queue length = %d, want only the unrelated searcher", got)
+	}
+}
+
+func ptrInt(v int) *int { return &v }
+
 func statusText(resp *http.Response) string {
 	if resp == nil {
 		return "<no response>"

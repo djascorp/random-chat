@@ -735,6 +735,106 @@ func TestJoinSessionPromotesSolo(t *testing.T) {
 	}
 }
 
+// OpenRoom creates an empty hosted session and binds the host in-call; a
+// second call on the same host fails — one room per host.
+func TestOpenRoomBindsIdleHost(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	host := newFakePeer("host")
+	s, ok := m.OpenRoom(host)
+	if !ok || host.State() != StateInCall || host.SessionID() != s.ID {
+		t.Fatalf("OpenRoom = %v, host state %v, session %q", ok, host.State(), host.SessionID())
+	}
+	if s.Mode != soloMode || s.MaxParticipants != 2 || len(s.Members()) != 1 {
+		t.Fatalf("room = mode %q cap %d members %d, want solo/2/[host]", s.Mode, s.MaxParticipants, len(s.Members()))
+	}
+
+	if _, ok := m.OpenRoom(host); ok {
+		t.Fatal("an in-call host must not open a second room")
+	}
+	waiter := newGroupPeer("group-waiter", 0)
+	m.Join(waiter) // alone in the queue: left waiting, not idle
+	if _, ok := m.OpenRoom(waiter); ok {
+		t.Fatal("a waiting peer must not open a room")
+	}
+	if got := manager.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+}
+
+// An empty hosted group room honours the host's cap.
+func TestOpenRoomGroupHonoursCap(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	host := newGroupPeer("host", 5)
+	s, ok := m.OpenRoom(host)
+	if !ok || s.Mode != groupMode || s.MaxParticipants != 5 {
+		t.Fatalf("OpenRoom = %v mode %q cap %d, want group capped at 5", ok, s.Mode, s.MaxParticipants)
+	}
+	if uncapped, ok := m.OpenRoom(newGroupPeer("host2", 0)); !ok || uncapped.MaxParticipants != 0 {
+		t.Fatalf("uncapped group room cap = %d, want 0", uncapped.MaxParticipants)
+	}
+	if got := manager.ActiveCount(); got != 2 {
+		t.Fatalf("active sessions = %d, want 2", got)
+	}
+}
+
+// Joining an empty hosted solo room keeps it solo: host + invitee is a normal
+// 1:1, no promotion and no session.updated announcement.
+func TestJoinSessionLoneSoloRoomStaysSolo(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	host := newFakePeer("host")
+	s, ok := m.OpenRoom(host)
+	if !ok {
+		t.Fatal("OpenRoom failed")
+	}
+
+	guest := newFakePeer("guest")
+	res := m.JoinSession(guest, s.ID)
+	if res.Err != "" || res.Promoted {
+		t.Fatalf("JoinSession = %+v, want success without promotion", res)
+	}
+	after, _ := manager.Get(s.ID)
+	if after.Mode != soloMode || len(after.Members()) != 2 {
+		t.Fatalf("room = mode %q with %d members, want solo with 2", after.Mode, len(after.Members()))
+	}
+	if guest.State() != StateInCall || guest.SessionID() != s.ID {
+		t.Fatalf("guest state = %v session %q, want in-call in %q", guest.State(), guest.SessionID(), s.ID)
+	}
+	if got := len(host.eventsNamed("session.updated")); got != 0 {
+		t.Fatalf("host received %d session.updated, want 0", got)
+	}
+	// The guest is a joiner: it offers, the host waits.
+	if got := len(guest.eventsNamed("match.found")); got != 1 {
+		t.Fatalf("guest received %d match.found, want 1", got)
+	}
+	if got := len(host.eventsNamed("peer.joined")); got != 1 {
+		t.Fatalf("host received %d peer.joined, want 1", got)
+	}
+}
+
+// A full solo room (2/2) still promotes on join — the historic path.
+func TestJoinSessionFullSoloPromotes(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	a, b := newFakePeer("a"), newFakePeer("b")
+	m.Join(a)
+	m.Join(b)
+
+	var sessionID string
+	if events := a.eventsNamed("match.found"); len(events) == 1 {
+		if payload, ok := events[0].payload.(matchPayloadData); ok {
+			sessionID = payload.SessionID
+		}
+	}
+	third := newFakePeer("third")
+	res := m.JoinSession(third, sessionID)
+	if res.Err != "" || !res.Promoted {
+		t.Fatalf("JoinSession = %+v, want success with promotion", res)
+	}
+	s, _ := manager.Get(sessionID)
+	if s.Mode != groupMode || len(s.Members()) != 3 {
+		t.Fatalf("room = mode %q with %d members, want group with 3", s.Mode, len(s.Members()))
+	}
+}
+
 // firstIndex returns the position of the first event with this name in the
 // peer's full log, for ordering checks across event kinds.
 func firstIndex(p *fakePeer, name string) int {

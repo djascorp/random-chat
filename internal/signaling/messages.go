@@ -259,9 +259,12 @@ type BlockAckPayload struct {
 // InviteCreatePayload asks the server for the session's invitation link.
 // MaxParticipants, when present, is validated (0 or >= 2) and applied to the
 // session first; Rotate revokes the previous token before minting a new one.
+// Mode selects the shape of a room opened when the caller has no session yet
+// ("solo" or "group"); it is ignored when a live session already exists.
 type InviteCreatePayload struct {
-	MaxParticipants *int `json:"max_participants,omitempty"`
-	Rotate          bool `json:"rotate,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	MaxParticipants *int   `json:"max_participants,omitempty"`
+	Rotate          bool   `json:"rotate,omitempty"`
 }
 
 // SessionJoinPayload enters a precise session through its invitation link.

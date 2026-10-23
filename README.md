@@ -158,6 +158,12 @@ precise discussion — preview first, then direct entry, no knocking. The token
 is opaque (never the session id) and the client builds the full URL itself,
 so the server needs no base-URL setting.
 
+A link can also precede the discussion entirely: `invite.create` with no live
+session opens an **empty hosted room** (solo holds the host plus one invitee,
+a group room starts uncapped or with the host's cap) and the host waits on the
+call screen until the first invitee triggers `peer.joined`. Revoking or
+leaving kills the room; the host's own search preferences are untouched.
+
 The `cid` is an opaque token stored in `localStorage`
 (`^[a-z0-9-]{8,64}$`). It lets blocks and suspensions survive a page reload
 without requiring an account. The server treats it as **untrusted**: it
@@ -176,7 +182,7 @@ Every frame is a JSON envelope: `{ "event": "...", "data": { ... } }`.
 | `session.add` | Pull one waiting peer into your session (promotes a solo call to a conference) |
 | `session.join` | Enter a precise session through its invitation link (`{ token }`, idle only) |
 | `session.update` | Change your session's member cap (`{ max_participants }`, 0 = no cap) |
-| `invite.create` | Get the session's link (`{ max_participants?, rotate? }`, members only) |
+| `invite.create` | Get the session's link (`{ mode?, max_participants?, rotate? }`); with no live session, opens an empty hosted room instead |
 | `invite.revoke` | Kill the session's link (members only, nobody is ejected) |
 | `rtc.offer` / `rtc.answer` | Forward an SDP description (`to` selects the recipient in a conference) |
 | `rtc.ice` | Forward an ICE candidate (`to` selects the recipient in a conference) |
@@ -190,7 +196,7 @@ Every frame is a JSON envelope: `{ "event": "...", "data": { ... } }`.
 | --- | --- |
 | `server.hello` | Client id, protocol version, ICE servers, limits |
 | `queue.waiting` / `queue.canceled` / `queue.timeout` | Queue state |
-| `match.found` | Session created, with `peers[]`, `mode`, `max_participants` (plus `role` in 1:1) |
+| `match.found` | Session created, with `peers[]`, `mode`, `max_participants` and a `role`: `offerer`/`answerer` in 1:1, `joiner` for a late arrival (it must offer to everyone — the identifier-order rule would stall when the joiner holds the highest id) |
 | `session.updated` | The room changed shape: promotion solo → group, or a new member cap |
 | `invite.created` | The session's link (`{ token, mode, max_participants }`, reply to `invite.create`) |
 | `invite.revoked` | The session's link is dead (open share dialogs disable themselves) |

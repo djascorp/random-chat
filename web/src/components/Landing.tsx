@@ -13,10 +13,22 @@ interface LandingProps {
   initialMax: number;
   preset: boolean;
   onStart: (mode: SessionMode, max: number) => void;
+  onInvite: () => void;
   busy: boolean;
 }
 
-export function Landing({ online, activeSessions, matchesTotal, turnConfigured, initialMode, initialMax, preset, onStart, busy }: LandingProps) {
+export function Landing({
+  online,
+  activeSessions,
+  matchesTotal,
+  turnConfigured,
+  initialMode,
+  initialMax,
+  preset,
+  onStart,
+  onInvite,
+  busy,
+}: LandingProps) {
   const t = useT();
   const [mode, setMode] = useState<SessionMode>(initialMode);
   const [max, setMax] = useState(initialMax === 0 ? '' : String(initialMax));
@@ -63,6 +75,9 @@ export function Landing({ online, activeSessions, matchesTotal, turnConfigured, 
                   ? t('landing.cta.groupMax', { n: maxValue })
                   : t('landing.cta.group')
                 : t('landing.cta.solo')}
+          </button>
+          <button type="button" className="btn btn--ghost btn--lg" onClick={onInvite} disabled={busy}>
+            {t('landing.invite')}
           </button>
           <span className="hero__hint">
             {preset ? `${t('landing.preset')} ` : null}
