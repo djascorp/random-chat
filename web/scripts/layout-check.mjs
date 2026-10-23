@@ -241,14 +241,18 @@ try {
 
   // Pre-accept the age gate, then reload so the landing is interactive.
   for (const client of [a, b]) {
+    await waitFor(client, `document.readyState === 'complete'`, { label: 'initial page load' });
     await client.eval(`localStorage.setItem('random-chat.consent-v1','true')`);
     await client.send('Page.reload');
-    await sleep(1200);
+    await waitFor(client, `document.readyState === 'complete'`, { label: 'page reload' });
+    await sleep(500);
   }
 
-  const startButton = `[...document.querySelectorAll('button')].find((el) => el.textContent.includes('Démarrer'))`;
-  await a.eval(`${startButton}.click()`);
-  await b.eval(`${startButton}.click()`);
+  const startButton = `[...document.querySelectorAll('button')].find((el) => /Démarrer|Start/i.test(el.textContent))`;
+  for (const client of [a, b]) {
+    await waitFor(client, `${startButton} !== undefined`, { label: 'start button visible' });
+    await client.eval(`${startButton}.click()`);
+  }
 
   await waitFor(a, `document.querySelector('.stage__remote.is-live')`, { label: 'peer A to reach a live call' });
   await waitFor(b, `document.querySelector('.stage__remote.is-live')`, { label: 'peer B to reach a live call' });
@@ -302,7 +306,7 @@ try {
       mobile: viewport.w < 500,
     });
     await sleep(300);
-    await a.eval(`[...document.querySelectorAll('.ctl')].find((el) => el.title === 'Ouvrir le chat').click()`);
+    await a.eval(`[...document.querySelectorAll('.ctl')].find((el) => /chat/i.test(el.title)).click()`);
     await sleep(600);
 
     const m = JSON.parse(await a.eval(MEASURE));
