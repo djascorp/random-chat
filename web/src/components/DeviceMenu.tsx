@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { FlipCameraIcon, MicIcon, SlidersIcon, VideoIcon } from './Icons';
 import { deviceLabel } from '../lib/format';
+import { useT } from '../i18n';
 
 interface DeviceMenuProps {
   cameras: MediaDeviceInfo[];
@@ -20,6 +21,7 @@ export function DeviceMenu({
   onSelectCamera,
   onSelectMicrophone,
 }: DeviceMenuProps) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -49,17 +51,17 @@ export function DeviceMenu({
         onClick={() => setOpen((value) => !value)}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Périphériques"
+        title={t("ctl.devices")}
       >
         <SlidersIcon size={20} />
-        <span className="ctl__label">Périphériques</span>
+        <span className="ctl__label">{t("ctl.devices")}</span>
       </button>
 
       {open ? (
         <div className="popover" role="menu">
           <div className="popover__section">
             <p className="popover__title">
-              <VideoIcon size={15} /> Caméra
+              <VideoIcon size={15} /> {t('devices.camera')}
             </p>
             {cameras.length === 0 ? (
               <p className="popover__empty">Aucune caméra détectée</p>
@@ -84,7 +86,7 @@ export function DeviceMenu({
 
           <div className="popover__section">
             <p className="popover__title">
-              <MicIcon size={15} /> Microphone
+              <MicIcon size={15} /> {t('devices.microphone')}
             </p>
             {microphones.length === 0 ? (
               <p className="popover__empty">Aucun micro détecté</p>
@@ -110,8 +112,8 @@ export function DeviceMenu({
           <p className="popover__hint">
             <FlipCameraIcon size={14} />
             {hasDevices
-              ? 'Le changement de périphérique est appliqué à chaud, sans interrompre l’appel.'
-              : 'Autorisez la caméra pour voir la liste des périphériques.'}
+              ? t('devices.hotswap')
+              : t('devices.needPermission')}
           </p>
         </div>
       ) : null}

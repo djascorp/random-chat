@@ -4,6 +4,7 @@ import { ChatIcon, MicIcon, MicOffIcon, PhoneOffIcon, SkipIcon, UserPlusIcon, Vi
 import { DeviceMenu } from './DeviceMenu';
 import { SearchPrefsMenu } from './SearchPrefs';
 import { SessionMenu } from './SessionMenu';
+import { useT } from '../i18n';
 
 interface ControlBarProps {
   micEnabled: boolean;
@@ -66,6 +67,7 @@ export function ControlBar({
   onSelectMicrophone,
   onVolumeChange,
 }: ControlBarProps) {
+  const t = useT();
   const barRef = useRef<HTMLDivElement>(null);
   const [volumeOpen, setVolumeOpen] = useState(false);
 
@@ -105,11 +107,11 @@ export function ControlBar({
           className={`ctl ${micEnabled ? '' : 'ctl--off'}`}
           onClick={onToggleMic}
           aria-pressed={!micEnabled}
-          aria-label={micEnabled ? 'Couper le micro (M)' : 'Activer le micro (M)'}
-          title={micEnabled ? 'Couper le micro (M)' : 'Activer le micro (M)'}
+          aria-label={micEnabled ? t('ctl.mic.off') : t('ctl.mic.on')}
+          title={micEnabled ? t('ctl.mic.off') : t('ctl.mic.on')}
         >
           {micEnabled ? <MicIcon size={20} /> : <MicOffIcon size={20} />}
-          <span className="ctl__label">{micEnabled ? 'Micro' : 'Micro coupé'}</span>
+          <span className="ctl__label">{micEnabled ? t('devices.microphone') : t('stage.cameraOff')}</span>
         </button>
 
         <button
@@ -117,11 +119,11 @@ export function ControlBar({
           className={`ctl ${camEnabled ? '' : 'ctl--off'}`}
           onClick={onToggleCam}
           aria-pressed={!camEnabled}
-          aria-label={camEnabled ? 'Couper la caméra (C)' : 'Activer la caméra (C)'}
-          title={camEnabled ? 'Couper la caméra (C)' : 'Activer la caméra (C)'}
+          aria-label={camEnabled ? t('ctl.cam.off') : t('ctl.cam.on')}
+          title={camEnabled ? t('ctl.cam.off') : t('ctl.cam.on')}
         >
           {camEnabled ? <VideoIcon size={20} /> : <VideoOffIcon size={20} />}
-          <span className="ctl__label">{camEnabled ? 'Caméra' : 'Caméra coupée'}</span>
+          <span className="ctl__label">{camEnabled ? t('devices.camera') : t('stage.cameraOff')}</span>
         </button>
 
         <DeviceMenu
@@ -141,11 +143,11 @@ export function ControlBar({
           type="button"
           className="ctl ctl--primary"
           onClick={onNext}
-          aria-label="Passer à l’interlocuteur suivant (N)"
-          title="Passer au suivant (N)"
+          aria-label={t('ctl.next')}
+          title={t("ctl.next")}
         >
           <SkipIcon size={22} />
-          <span className="ctl__label">Suivant</span>
+          <span className="ctl__label">{t('stage.caller')}</span>
         </button>
         {isGroup ? (
           <button
@@ -153,22 +155,22 @@ export function ControlBar({
             className="ctl"
             onClick={onAdd}
             disabled={!canAdd}
-            aria-label={canAdd ? 'Ajouter un participant (A)' : 'Conférence complète'}
-            title={canAdd ? 'Ajouter un participant (A)' : 'Conférence complète'}
+            aria-label={canAdd ? t('ctl.add') : t('ctl.add.full')}
+            title={canAdd ? t('ctl.add') : t('ctl.add.full')}
           >
             <UserPlusIcon size={20} />
-            <span className="ctl__label">Ajouter</span>
+            <span className="ctl__label">{t('ctl.add').split(' ')[0]}</span>
           </button>
         ) : null}
         <button
           type="button"
           className="ctl ctl--danger"
           onClick={onStop}
-          aria-label="Quitter la conversation (Q)"
-          title="Quitter la conversation (Q)"
+          aria-label={t('ctl.stop')}
+          title={t("ctl.stop")}
         >
           <PhoneOffIcon size={20} />
-          <span className="ctl__label">Quitter</span>
+          <span className="ctl__label">{t('stage.error.back')}</span>
         </button>
       </div>
 
@@ -179,14 +181,14 @@ export function ControlBar({
             className={`ctl ${volume === 0 ? 'ctl--muted' : ''}`}
             onClick={() => setVolumeOpen((open) => !open)}
             aria-expanded={volumeOpen}
-            aria-label="Volume de l’appelant"
-            title="Volume de l’appelant"
+            aria-label={t('ctl.volume')}
+            title={t("ctl.volume")}
           >
             {volume === 0 ? <VolumeOffIcon size={20} /> : <VolumeIcon size={20} />}
-            <span className="ctl__label">Volume</span>
+            <span className="ctl__label">{t('ctl.volume')}</span>
           </button>
           {volumeOpen ? (
-            <div className="vol__pop" role="group" aria-label="Réglage du volume de l’appelant">
+            <div className="vol__pop" role="group" aria-label={t("ctl.volume")}>
               <span className="vol__icon">
                 {volume === 0 ? <VolumeOffIcon size={16} /> : <VolumeIcon size={16} />}
               </span>
@@ -197,7 +199,7 @@ export function ControlBar({
                 step={1}
                 value={Math.round(Math.min(1, Math.max(0, volume)) * 100)}
                 onChange={(event) => onVolumeChange(Number(event.target.value) / 100)}
-                aria-label="Niveau du volume"
+                aria-label={t("ctl.volume.level")}
               />
               <span className="vol__value">{Math.round(Math.min(1, Math.max(0, volume)) * 100)}%</span>
             </div>
@@ -208,12 +210,12 @@ export function ControlBar({
           type="button"
           className={`ctl ${chatOpen ? 'ctl--active' : ''}`}
           onClick={onToggleChat}
-          aria-label="Ouvrir le chat (T)"
-          title="Ouvrir le chat (T)"
+          aria-label={t('ctl.chat')}
+          title={t("ctl.chat")}
         >
           <ChatIcon size={20} />
           {unread > 0 ? <span className="ctl__badge">{unread > 9 ? '9+' : unread}</span> : null}
-          <span className="ctl__label">Chat</span>
+          <span className="ctl__label">{t('chat.title')}</span>
         </button>
 
         {isGroup ? null : <SessionMenu inCall={inCall} onReport={onReport} onBlock={onBlock} />}

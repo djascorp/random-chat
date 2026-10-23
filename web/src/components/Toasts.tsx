@@ -1,3 +1,4 @@
+import { useT } from '../i18n';
 import type { Toast } from '../types';
 import { AlertIcon, CloseIcon } from './Icons';
 
@@ -7,6 +8,7 @@ interface ToastsProps {
 }
 
 export function Toasts({ toasts, onDismiss }: ToastsProps) {
+  const t = useT();
   if (toasts.length === 0) return null;
   return (
     <div className="toasts" role="status" aria-live="polite">
@@ -23,7 +25,7 @@ export function Toasts({ toasts, onDismiss }: ToastsProps) {
             type="button"
             className="icon-btn icon-btn--ghost"
             onClick={() => onDismiss(toast.id)}
-            aria-label="Fermer la notification"
+            aria-label={t("toast.close")}
           >
             <CloseIcon size={16} />
           </button>

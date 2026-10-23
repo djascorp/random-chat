@@ -9,6 +9,7 @@ import { ReportDialog } from './components/ReportDialog';
 import { ConsentGate } from './components/ConsentGate';
 import { Toasts } from './components/Toasts';
 import { SparkIcon } from './components/Icons';
+import { LangProvider, LangSwitcher } from './i18n';
 
 const DEFAULT_MAX_RUNES = 1000;
 const VOLUME_STORAGE_KEY = 'random-chat.volume';
@@ -186,6 +187,7 @@ export default function App() {
   }, [chat, reportOpen]);
 
   return (
+    <LangProvider>
     <div className="app">
       <div className="aurora" aria-hidden="true">
         <span className="orb orb--one" />
@@ -203,6 +205,7 @@ export default function App() {
             Random<span className="brand__accent">Chat</span>
           </span>
         </div>
+        <LangSwitcher />
         <span className="topbar__meta">
           {chat.publicStats ? (
             <>
@@ -305,5 +308,6 @@ export default function App() {
 
       <Toasts toasts={chat.toasts} onDismiss={chat.dismissToast} />
     </div>
+    </LangProvider>
   );
 }

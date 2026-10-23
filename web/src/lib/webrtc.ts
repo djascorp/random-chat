@@ -235,13 +235,13 @@ export function describeConnection(stats: PeerStats | null): {
   label: string;
   tone: 'ok' | 'warn' | 'bad';
 } {
-  if (!stats) return { label: 'Connexion…', tone: 'warn' };
+  if (!stats) return { label: 'connecting', tone: 'warn' };
   if (stats.candidateType === 'relay') {
-    return { label: 'Relais TURN', tone: 'warn' };
+    return { label: 'relay', tone: 'warn' };
   }
   const rtt = stats.rttMs;
-  if (rtt === null) return { label: 'Direct', tone: 'ok' };
-  if (rtt < 150) return { label: `Direct ${rtt} ms`, tone: 'ok' };
-  if (rtt < 350) return { label: `Moyen ${rtt} ms`, tone: 'warn' };
-  return { label: `Lent ${rtt} ms`, tone: 'bad' };
+  if (rtt === null) return { label: 'direct', tone: 'ok' };
+  if (rtt < 150) return { label: `directMs:${rtt}`, tone: 'ok' };
+  if (rtt < 350) return { label: `fairMs:${rtt}`, tone: 'warn' };
+  return { label: `slowMs:${rtt}`, tone: 'bad' };
 }

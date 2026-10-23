@@ -1,3 +1,4 @@
+import { useT } from '../i18n';
 import { useEffect, useState } from 'react';
 import { REPORT_CATEGORIES } from '../types';
 import { CloseIcon, ShieldIcon } from './Icons';
@@ -11,6 +12,7 @@ interface ReportDialogProps {
 }
 
 export function ReportDialog({ open, targets, initialTargetId, onClose, onSubmit }: ReportDialogProps) {
+  const t = useT();
   const [category, setCategory] = useState<string>('harassment');
   const [reason, setReason] = useState('');
   const [block, setBlock] = useState(true);
@@ -42,15 +44,15 @@ export function ReportDialog({ open, targets, initialTargetId, onClose, onSubmit
               La personne sera exclue de la session et le signalement transmis à la modération.
             </p>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Fermer">
+          <button type="button" className="icon-btn" onClick={onClose} aria-label={t("report.close")}>
             <CloseIcon size={18} />
           </button>
         </div>
 
         {needsChoice ? (
           <div className="field">
-            <span className="field__label">Participant concerné</span>
-            <div className="chips" role="radiogroup" aria-label="Participant concerné">
+            <span className="field__label">{t('report.target')}</span>
+            <div className="chips" role="radiogroup" aria-label={t("report.target")}>
               {targets.map((target) => (
                 <button
                   key={target.id}
@@ -68,7 +70,7 @@ export function ReportDialog({ open, targets, initialTargetId, onClose, onSubmit
         ) : null}
 
         <div className="field">
-          <span className="field__label">Motif principal</span>
+          <span className="field__label">{t('report.category')}</span>
           <div className="chips">
             {REPORT_CATEGORIES.map((option) => (
               <button
@@ -77,27 +79,27 @@ export function ReportDialog({ open, targets, initialTargetId, onClose, onSubmit
                 className={`chip ${category === option.value ? 'is-selected' : ''}`}
                 onClick={() => setCategory(option.value)}
               >
-                {option.label}
+                {t(`report.cat.${option.value}` as never)}
               </button>
             ))}
           </div>
         </div>
 
         <label className="field">
-          <span className="field__label">Précisions (optionnel)</span>
+          <span className="field__label">{t('report.details')}</span>
           <textarea
             className="field__input"
             rows={3}
             maxLength={500}
             value={reason}
-            placeholder="Décrivez brièvement ce qui s’est passé"
+            placeholder={t("report.details.placeholder")}
             onChange={(event) => setReason(event.target.value)}
           />
         </label>
 
         <label className="check">
           <input type="checkbox" checked={block} onChange={(event) => setBlock(event.target.checked)} />
-          <span>Bloquer cette personne pour ne plus jamais lui être associé</span>
+          <span>{t('report.block')}</span>
         </label>
 
         <div className="modal__actions">
@@ -113,7 +115,7 @@ export function ReportDialog({ open, targets, initialTargetId, onClose, onSubmit
               onClose();
             }}
           >
-            Envoyer le signalement
+            {t('report.submit')}
           </button>
         </div>
       </div>

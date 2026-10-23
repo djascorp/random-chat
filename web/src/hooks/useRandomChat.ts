@@ -1,3 +1,4 @@
+import { getT } from '../i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   C2S,
@@ -43,6 +44,7 @@ interface DeviceLists {
  * once per connection while the React closures change on every render.
  */
 export function useRandomChat() {
+  const t = getT();
   const [status, setStatus] = useState<CallStatus>('idle');
   const [statusDetail, setStatusDetail] = useState('');
   const [consentAccepted, setConsentAccepted] = useState<boolean>(() => readConsent());
@@ -294,21 +296,21 @@ export function useRandomChat() {
         prefs.mode === 'group'
           ? { mode: prefs.mode, max_participants: prefs.max }
           : { mode: prefs.mode, max_participants: 0 };
-      if (!client.send(C2S.queueJoin, payload)) throw new Error('socket de signalisation indisponible');
+      if (!client.send(C2S.queueJoin, payload)) throw new Error(t('status.signalUnavailable'));
       setQueuePosition(0);
       applyStatus(
         'waiting',
-        prefs.mode === 'group' ? 'Recherche d’une conférence' : 'Recherche d’un interlocuteur',
+        prefs.mode === 'group' ? t('status.searching.group') : t('status.searching.solo'),
       );
       if (navigator.mediaDevices) void refreshDevices();
     } catch (err) {
       // The close handler has already explained a refused handshake; keep its
       // message rather than replacing it with a generic transport error.
       if (statusRef.current === 'error') return;
-      const message = err instanceof Error ? err.message : 'connexion au serveur impossible';
+      const message = err instanceof Error ? err.message : t('status.serverUnreachable');
       setError(message);
       applyStatus('error', message);
-      pushToast('error', 'Connexion impossible', message);
+      pushToast('error', t('toast.connectFailed.title'), message);
     }
   }, [applyStatus, clearTimers, ensureSignaling, pushToast, refreshDevices]);
 
@@ -325,10 +327,10 @@ export function useRandomChat() {
       setError(null);
       setMessages([]);
       setUnread(0);
-      applyStatus('requesting-media', 'Autorisation caméra et micro');
+      applyStatus('requesting-media', t('status.cameraPrompt'));
 
       if (!navigator.mediaDevices?.getUserMedia) {
-        const message = 'Ce navigateur ne donne pas accès à la caméra (HTTPS requis).';
+        const message = t('toast.cameraDenied.body');
         setError(message);
         applyStatus('error', message);
         return;
@@ -351,7 +353,7 @@ export function useRandomChat() {
         const message = describeMediaError(err);
         setError(message);
         applyStatus('error', message);
-        pushToast('error', 'Accès caméra refusé', message);
+        pushToast('error', t('toast.cameraDenied.title'), message);
       }
     },
     [applyStatus, chooseSearchPrefs, joinQueue, pushToast, refreshDevices],
@@ -371,7 +373,7 @@ export function useRandomChat() {
     }
     const prefs = prefsRef.current;
     const waitingText =
-      prefs.mode === 'group' ? 'Recherche d’une conférence' : 'Recherche d’un interlocuteur';
+      prefs.mode === 'group' ? t('status.searching.group') : t('status.searching.solo');
     if (inCall && sessionRef.current) {
       // The current search shape travels with Suivant so a setting changed
       // mid-call is already in effect for the next search.
@@ -453,7 +455,7 @@ export function useRandomChat() {
         setSelectedCamera(deviceId);
         setCamEnabled(track.enabled);
       } catch (err) {
-        pushToast('error', 'Changement de caméra impossible', describeMediaError(err));
+        pushToast('error', t('toast.cameraSwitchFailed'), describeMediaError(err));
       }
     },
     [pushToast, rebuildLocalStream],
@@ -476,7 +478,7 @@ export function useRandomChat() {
         selectedMicrophoneRef.current = deviceId;
         setSelectedMicrophone(deviceId);
       } catch (err) {
-        pushToast('error', 'Changement de micro impossible', describeMediaError(err));
+        pushToast('error', t('toast.micSwitchFailed'), describeMediaError(err));
       }
     },
     [micEnabled, pushToast, rebuildLocalStream],
@@ -488,7 +490,7 @@ export function useRandomChat() {
       if (!text) return;
       const client = signalingRef.current;
       if (!client?.isOpen || !sessionRef.current) {
-        pushToast('warn', 'Aucun interlocuteur', 'Le message n’a pas pu être envoyé.');
+        pushToast('warn', t('toast.noPeer.title'), t('toast.noPeer.send'));
         return;
       }
       setMessages((previous) => [
@@ -504,11 +506,11 @@ export function useRandomChat() {
     (targetId?: string) => {
       const client = signalingRef.current;
       if (!client?.isOpen || !sessionRef.current) {
-        pushToast('warn', 'Aucun interlocuteur', 'Rien à bloquer pour le moment.');
+        pushToast('warn', t('toast.noPeer.title'), t('toast.noPeer.block'));
         return;
       }
       client.send(C2S.blockCreate, targetId ? { target: targetId } : {});
-      pushToast('success', 'Utilisateur bloqué', 'Vous ne serez plus mis en relation avec cette personne.');
+      pushToast('success', t('toast.blocked.title'), t('toast.blocked.body'));
     },
     [pushToast],
   );
@@ -524,7 +526,7 @@ export function useRandomChat() {
         C2S.reportCreate,
         targetId ? { category, reason, details: '', block, target: targetId } : { category, reason, details: '', block },
       );
-      pushToast('success', 'Signalement envoyé', 'Merci, notre équipe de modération va l’examiner.');
+      pushToast('success', t('toast.reportSent.title'), t('toast.reportSent.body'));
     },
     [pushToast],
   );
@@ -532,7 +534,7 @@ export function useRandomChat() {
   const addParticipant = useCallback(() => {
     const client = signalingRef.current;
     if (!client?.isOpen || !sessionRef.current) {
-      pushToast('warn', 'Aucune conférence', 'Rejoignez d’abord une conférence.');
+      pushToast('warn', t('toast.noGroup.title'), t('toast.noGroup.body'));
       return;
     }
     client.send(C2S.sessionAdd);
@@ -575,8 +577,8 @@ export function useRandomChat() {
         applyStatus(
           'waiting',
           prefsRef.current.mode === 'group'
-            ? 'Recherche d’une conférence'
-            : 'Recherche d’un interlocuteur',
+            ? t('status.searching.group')
+            : t('status.searching.solo'),
         );
       }
     },
@@ -587,7 +589,7 @@ export function useRandomChat() {
 
     onQueueTimeout: () => {
       applyStatus('idle');
-      pushToast('warn', 'Personne en ligne', 'Aucun interlocuteur trouvé, réessayez dans un instant.');
+      pushToast('warn', t('toast.nobodyOnline.title'), t('toast.nobodyOnline.body'));
     },
 
     onMatchFound: (payload) => {
@@ -602,7 +604,7 @@ export function useRandomChat() {
       // notice still in the list; a fresh session starts with a clean chat.
       setMessages([]);
       setUnread(0);
-      applyStatus('connecting', 'Négociation de la connexion');
+      applyStatus('connecting', t('status.negotiating'));
       // One SDP offer per pair, no coordination round trip: the longest
       // waiter offers in solo mode (server role), while conference members
       // compare identifiers and the smaller one offers.
@@ -613,7 +615,7 @@ export function useRandomChat() {
             const offer = await peer.createOffer();
             signalingRef.current?.send(C2S.rtcOffer, { ...offer, to: peerId });
           } catch (err) {
-            pushToast('error', 'Négociation impossible', describeMediaError(err));
+            pushToast('error', t('toast.negotiationFailed'), describeMediaError(err));
           }
         })();
       };
@@ -636,7 +638,7 @@ export function useRandomChat() {
           const answer = await peer.acceptOffer(sdp);
           signalingRef.current?.send(C2S.rtcAnswer, { ...answer, to: from });
         } catch (err) {
-          pushToast('error', 'Négociation impossible', describeMediaError(err));
+          pushToast('error', t('toast.negotiationFailed'), describeMediaError(err));
         }
       })();
     },
@@ -657,15 +659,15 @@ export function useRandomChat() {
       );
       // The newcomer offers to everyone: the room only waits for the offer.
       ensurePeerConnection(payload.peer_id);
-      pushSystemMessage('Un participant a rejoint la conférence.');
+      pushSystemMessage(t('chat.peerJoined'));
     },
 
     onPeerLeft: (payload) => {
       dropPeerConnection(payload.peer_id);
       pushSystemMessage(
         payload.members > 1
-          ? `Un participant est parti (${payload.members} restants).`
-          : 'Un participant est parti, vous êtes seul.',
+          ? t('chat.peerLeftCount', { n: payload.members })
+          : t('chat.peerLeft.alone'),
       );
     },
 
@@ -715,11 +717,11 @@ export function useRandomChat() {
 
     onError: (payload) => {
       if (payload.code === 'replaced') {
-        applyStatus('error', 'Connexion reprise dans un autre onglet.');
+        applyStatus('error', t('server.replaced'));
         return;
       }
       if (payload.code === 'rate_limited') {
-        pushToast('warn', 'Trop de requêtes', payload.message);
+        pushToast('warn', t('toast.tooMany.title'), t('server.rate_limited'));
         return;
       }
       if (payload.code === 'suspended') {
@@ -728,17 +730,17 @@ export function useRandomChat() {
         return;
       }
       if (payload.code === 'empty_queue') {
-        pushToast('info', 'Personne en attente', 'Aucun interlocuteur disponible pour le moment.');
+        pushToast('info', t('server.empty_queue.title'), t('server.empty_queue.body'));
         return;
       }
       if (payload.code === 'solo_session' || payload.code === 'session_full') {
-        pushToast('warn', 'Ajout impossible', payload.message);
+        pushToast('warn', t('toast.addFailed.title'), payload.message);
         return;
       }
       if (payload.code === 'no_peer' || payload.code === 'not_waiting' || payload.code === 'no_session') {
         return;
       }
-      pushToast('error', 'Erreur de protocole', payload.message);
+      pushToast('error', t('toast.protocolError.title'), payload.message);
     },
 
     onConnectionState: (state, peerId) => {
@@ -750,7 +752,7 @@ export function useRandomChat() {
         return;
       }
       if (state === 'connecting') {
-        if (statusRef.current !== 'connected') applyStatus('connecting', 'Négociation de la connexion');
+        if (statusRef.current !== 'connected') applyStatus('connecting', t('status.negotiating'));
         return;
       }
       if (state === 'disconnected') {
@@ -758,7 +760,7 @@ export function useRandomChat() {
         // A conference survives one peer dropping; only the last link down
         // reads as a reconnection.
         if (connectedRef.current.size === 0) {
-          applyStatus('reconnecting', 'Connexion instable, reprise en cours');
+          applyStatus('reconnecting', t('status.unstable'));
         }
         return;
       }
@@ -772,7 +774,7 @@ export function useRandomChat() {
       if (peersRef.current.size > 1) {
         // One mesh link died while others live: drop the tile, keep the call.
         dropPeerConnection(peerId);
-        pushToast('warn', 'Participant perdu', 'La connexion avec un participant a été coupée.');
+        pushToast('warn', t('toast.peerLost.title'), t('toast.peerLost.body'));
         return;
       }
       if (restartAttemptsRef.current < 1 && peer) {
@@ -781,7 +783,7 @@ export function useRandomChat() {
         peer.restartIce();
         return;
       }
-      pushToast('warn', 'Connexion impossible', 'Réseau trop restrictif : recherche d’un nouvel interlocuteur.');
+      pushToast('warn', t('toast.connectFailed.title'), t('toast.iceFailed.body'));
       applyStatus('idle');
       if (signalingRef.current?.isOpen) {
         signalingRef.current.send(C2S.sessionNext);
@@ -809,17 +811,13 @@ export function useRandomChat() {
       // Distinguish "we lost the server" from "the server never let us in",
       // because the second one is a configuration problem, not a network blip.
       const established = helloReceivedRef.current;
-      const message = established
-        ? 'Connexion au serveur perdue.'
-        : 'Le serveur a refusé la connexion de signalisation.';
+      const message = established ? t('status.serverLost') : t('status.signalRefused');
       setError(message);
       applyStatus('error', message);
       pushToast(
         'error',
-        'Serveur injoignable',
-        established
-          ? 'Vérifiez votre connexion puis réessayez.'
-          : 'Vérifiez ALLOWED_ORIGINS côté serveur, puis réessayez.',
+        t('toast.serverDown.title'),
+        established ? t('error.checkNetwork') : t('error.checkOrigins'),
       );
     },
   };
@@ -945,19 +943,19 @@ interface Handlers {
 function describeSessionEnd(reason: SessionEnded['reason']): string {
   switch (reason) {
     case 'peer_disconnected':
-      return 'L’interlocuteur s’est déconnecté.';
+      return getT()('error.peerDisconnected');
     case 'next':
-      return 'L’interlocuteur est passé au suivant.';
+      return getT()('error.peerSkipped');
     case 'left':
-      return 'L’interlocuteur a quitté la conversation.';
+      return getT()('error.peerLeft');
     case 'reported':
-      return 'La session a été fermée après votre signalement.';
+      return getT()('error.closedByReport');
     case 'blocked':
-      return 'La session a été fermée et cette personne est bloquée.';
+      return getT()('error.closedByBlock');
     case 'server_shutdown':
-      return 'Le service redémarre, la session a été interrompue.';
+      return getT()('error.sessionShutdown');
     default:
-      return 'Session terminée.';
+      return getT()('error.sessionEnded');
   }
 }
 
@@ -965,21 +963,21 @@ function describeMediaError(err: unknown): string {
   if (err instanceof DOMException) {
     switch (err.name) {
       case 'NotAllowedError':
-        return 'Vous avez refusé l’accès à la caméra ou au micro. Autorisez-le puis réessayez.';
+        return getT()('media.notAllowed');
       case 'NotFoundError':
-        return 'Aucune caméra ou aucun micro détecté sur cet appareil.';
+        return getT()('media.notFound');
       case 'NotReadableError':
-        return 'Votre caméra est déjà utilisée par une autre application.';
+        return getT()('media.notReadable');
       case 'OverconstrainedError':
-        return 'La caméra demandée n’est pas disponible.';
+        return getT()('media.overconstrained');
       case 'SecurityError':
-        return 'L’accès aux médias exige une connexion sécurisée (HTTPS).';
+        return getT()('media.insecure');
       default:
-        return `Erreur média : ${err.name}`;
+        return getT()('media.error', { name: err.name });
     }
   }
   if (err instanceof Error) return err.message;
-  return 'Erreur inattendue lors de l’accès aux médias.';
+  return getT()('media.generic');
 }
 
 function readConsent(): boolean {

@@ -1,3 +1,4 @@
+import { useT } from '../i18n';
 import { useState } from 'react';
 import { ShieldIcon } from './Icons';
 
@@ -13,6 +14,7 @@ interface ConsentGateProps {
  * put a minor in front of a stranger.
  */
 export function ConsentGate({ onAccept }: ConsentGateProps) {
+  const t = useT();
   const [adult, setAdult] = useState(false);
   const [terms, setTerms] = useState(false);
   const ready = adult && terms;
@@ -24,28 +26,26 @@ export function ConsentGate({ onAccept }: ConsentGateProps) {
           <ShieldIcon size={26} />
         </div>
         <h2 id="consent-title" className="modal__title">
-          Avant de commencer
+          {t('consent.title')}
         </h2>
         <p className="modal__lead">
-          Cet espace met en relation des personnes qui ne se connaissent pas, en direct et sans
-          modération automatique du contenu. Merci de confirmer les points suivants.
+          {t('consent.text')}
         </p>
 
         <label className="check">
           <input type="checkbox" checked={adult} onChange={(event) => setAdult(event.target.checked)} />
-          <span>J’ai 18 ans ou plus.</span>
+          <span>{t('consent.adult')}</span>
         </label>
 
         <label className="check">
           <input type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} />
           <span>
-            J’accepte les règles : pas de nudité, pas de harcèlement, pas de contenu illégal, et
-            j’accepte que tout signalement soit enregistré.
+            {t('consent.terms')}
           </span>
         </label>
 
         <button type="button" className="btn btn--primary btn--block" disabled={!ready} onClick={onAccept}>
-          J’ai compris, continuer
+          {t('consent.cta')}
         </button>
 
         <p className="modal__fineprint">

@@ -1,3 +1,4 @@
+import { useT } from '../i18n';
 import { useEffect, useRef, useState } from 'react';
 import type { SessionMode } from '../types';
 import { UsersIcon } from './Icons';
@@ -21,6 +22,7 @@ interface SearchPrefsProps {
 
 /** Solo vs conference choice with the optional member cap. */
 export function SearchPrefs({ mode, maxText, onModeChange, onMaxChange }: SearchPrefsProps) {
+  const t = useT();
   const value = parseMaxParticipants(maxText) ?? 0;
 
   /* Touch stepper instead of a typeable field: 0 means "no limit", and the
@@ -40,7 +42,7 @@ export function SearchPrefs({ mode, maxText, onModeChange, onMaxChange }: Search
 
   return (
     <>
-      <div className="mode-cards" role="radiogroup" aria-label="Type de conversation">
+      <div className="mode-cards" role="radiogroup" aria-label={t("prefs.groupLabel")}>
         <button
           type="button"
           role="radio"
@@ -49,8 +51,8 @@ export function SearchPrefs({ mode, maxText, onModeChange, onMaxChange }: Search
           onClick={() => onModeChange('solo')}
         >
           <UsersIcon size={22} />
-          <span className="mode-card__title">Solo</span>
-          <span className="mode-card__text">Tête-à-tête classique, comme avant.</span>
+          <span className="mode-card__title">{t("prefs.solo")}</span>
+          <span className="mode-card__text">{t('prefs.solo.desc')}</span>
         </button>
         <button
           type="button"
@@ -60,33 +62,33 @@ export function SearchPrefs({ mode, maxText, onModeChange, onMaxChange }: Search
           onClick={() => onModeChange('group')}
         >
           <UsersIcon size={22} />
-          <span className="mode-card__title">Conférence</span>
-          <span className="mode-card__text">Plusieurs participants, bouton Ajouter en cours d’appel.</span>
+          <span className="mode-card__title">{t("prefs.group")}</span>
+          <span className="mode-card__text">{t('prefs.group.desc')}</span>
         </button>
       </div>
 
       {mode === 'group' ? (
-        <div className="max-field" role="group" aria-label="Participants maximum">
-          <span className="max-field__label">Participants maximum</span>
+        <div className="max-field" role="group" aria-label={t("prefs.maxLabel")}>
+          <span className="max-field__label">{t("prefs.maxLabel")}</span>
           <div className="stepper">
             <button
               type="button"
               className="stepper__btn"
               onClick={() => stepMax(-1)}
               disabled={value === 0}
-              aria-label="Réduire le nombre maximum de participants"
+              aria-label={t("prefs.max.decrease")}
             >
               −
             </button>
             <span className="stepper__value" aria-live="polite">
-              {value === 0 ? 'Sans limite' : `${value} max`}
+              {value === 0 ? t('prefs.max.unlimited') : t('prefs.max.short', { n: value })}
             </span>
             <button
               type="button"
               className="stepper__btn"
               onClick={() => stepMax(1)}
               disabled={value === 99}
-              aria-label="Augmenter le nombre maximum de participants"
+              aria-label={t("prefs.max.increase")}
             >
               +
             </button>
@@ -108,6 +110,7 @@ interface SearchPrefsMenuProps {
  * Suivant searches for — no need to leave the call to switch shape.
  */
 export function SearchPrefsMenu({ mode, max, onChange }: SearchPrefsMenuProps) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [maxText, setMaxText] = useState(max === 0 ? '' : String(max));
   const containerRef = useRef<HTMLDivElement>(null);
@@ -143,11 +146,11 @@ export function SearchPrefsMenu({ mode, max, onChange }: SearchPrefsMenuProps) {
         onClick={() => setOpen((value) => !value)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Type de recherche : ${mode === 'group' ? 'conférence' : 'solo'}. Appliqué au prochain Suivant.`}
-        title="Type de recherche (appliqué au Suivant)"
+        aria-label={t('prefs.menu.label', { mode: mode === 'group' ? t('prefs.group') : t('prefs.solo') })}
+        title={t("prefs.menu.title")}
       >
         <UsersIcon size={20} />
-        <span className="ctl__label">{mode === 'group' ? (max > 0 ? `Conf. ${max}` : 'Conf.') : 'Solo'}</span>
+        <span className="ctl__label">{mode === 'group' ? (max > 0 ? t('prefs.menu.groupMax', { n: max }) : t('prefs.menu.group')) : t('prefs.solo')}</span>
       </button>
 
       {open ? (

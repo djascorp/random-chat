@@ -1,3 +1,4 @@
+import { useT } from '../i18n';
 import { useEffect, useRef, useState } from 'react';
 import { BlockIcon, DotsIcon, FlagIcon } from './Icons';
 
@@ -13,6 +14,7 @@ interface SessionMenuProps {
  * for a second tap because it can never be undone.
  */
 export function SessionMenu({ inCall, onReport, onBlock }: SessionMenuProps) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [confirmingBlock, setConfirmingBlock] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -45,8 +47,8 @@ export function SessionMenu({ inCall, onReport, onBlock }: SessionMenuProps) {
         onClick={() => setOpen((value) => !value)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Plus d’actions de session"
-        title="Signaler, bloquer…"
+        aria-label={t("session.more")}
+        title={t("session.moreHint")}
       >
         <DotsIcon size={20} />
         <span className="ctl__label">Plus</span>
@@ -86,7 +88,7 @@ export function SessionMenu({ inCall, onReport, onBlock }: SessionMenuProps) {
             <span className="popover__item-icon">
               <BlockIcon size={16} />
             </span>
-            {confirmingBlock ? 'Confirmer le blocage définitif' : 'Bloquer l’interlocuteur'}
+            {confirmingBlock ? t('session.blockConfirm') : t('session.block')}
           </button>
           <p className="popover__hint">
             Le blocage est définitif : vous ne serez plus jamais mis en relation avec cette

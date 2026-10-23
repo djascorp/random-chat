@@ -1383,3 +1383,35 @@
   font-size: 0.8rem;
   color: var(--muted-strong);
 }
+
+/* =========================================================================
+   Language switcher (EN default / FR) — segmented pill in the top bar.
+   ========================================================================= */
+.lang-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.lang-switch__option {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.lang-switch__option:hover {
+  color: var(--text);
+}
+.lang-switch__option.is-active {
+  background: var(--surface-strong);
+  color: var(--text);
+}

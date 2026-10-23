@@ -13,6 +13,7 @@ import {
 } from './Icons';
 import { describeConnection } from '../lib/webrtc';
 import { formatDuration } from '../lib/format';
+import { useT } from '../i18n';
 import { useSpeakingDetection } from '../hooks/useSpeakingDetection';
 
 interface CallStageProps {
@@ -107,6 +108,7 @@ export function CallStage({
   const mainVideoRef = useRef<HTMLVideoElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
 
+  const t = useT();
   const connection = describeConnection(quality);
   const inCall = status === 'connected' || status === 'reconnecting';
   const showLocal = Boolean(localStream);
@@ -116,7 +118,7 @@ export function CallStage({
   const lone = isGroup && inCall && remotePeers.length === 0;
 
   const peerLabel = useCallback(
-    (peer: RemotePeer) => `Participant ${remotePeers.indexOf(peer) + 2}`,
+    (peer: RemotePeer) => t('stage.participant', { n: remotePeers.indexOf(peer) + 2 }),
     [remotePeers],
   );
 
@@ -260,18 +262,18 @@ export function CallStage({
   };
 
   const scrimTitle = requestingMedia
-    ? 'Activation de la caméra…'
+    ? t('stage.cameraPrompt')
     : lone
-      ? 'En attente de participants…'
+      ? t('stage.waitingParticipants')
       : SEARCHING.includes(status)
-        ? 'Recherche d’un interlocuteur…'
-        : 'Connexion en cours…';
+        ? t('stage.searching')
+        : t('stage.connecting');
   const qualityHint =
     quality?.candidateType === 'relay'
-      ? 'Appel relayé via TURN : la qualité peut être réduite sur ce réseau'
+      ? t('stage.quality.turn')
       : quality?.rttMs !== null && quality?.rttMs !== undefined
-        ? `Aller-retour réseau : ${quality.rttMs} ms`
-        : 'Mesure de la qualité de connexion en cours';
+        ? t('stage.quality.rtt', { n: quality.rttMs ?? 0 })
+        : t('stage.quality.measuring');
 
   if (status === 'error') {
     return (
@@ -280,14 +282,14 @@ export function CallStage({
           <span className="stage__card-icon stage__card-icon--bad">
             <AlertIcon size={26} />
           </span>
-          <h2>La session s’est arrêtée</h2>
-          <p>{error ?? 'Une erreur inattendue est survenue.'}</p>
+          <h2>{t('stage.error.title')}</h2>
+          <p>{error ?? t('stage.error.fallback')}</p>
           <div className="stage__card-actions">
             <button type="button" className="btn btn--primary" onClick={onRetry}>
-              Réessayer
+              {t('stage.error.retry')}
             </button>
             <button type="button" className="btn btn--ghost" onClick={onBack}>
-              Retour à l’accueil
+              {t('stage.error.back')}
             </button>
           </div>
         </div>
@@ -305,21 +307,21 @@ export function CallStage({
           elementRef={(element) => {
             mainVideoRef.current = element;
           }}
-          label={`${peerLabel(mainPeer)} en grand`}
+          label={t('stage.remoteVideoLarge')}
         />
       ) : (
         <div className="stage__off">
           <UsersIcon size={30} />
-          <span>Connexion…</span>
+          <span>{t('stage.peerConnecting')}</span>
         </div>
       )}
       <button
         type="button"
         className="stage__unpin"
         onClick={() => setPinnedId(null)}
-        title="Revenir à la grille"
+        title={t('stage.unpin')}
       >
-        ← Grille
+        ← {t('stage.unpin')}
       </button>
       <span className="stage__local-badge">{peerLabel(mainPeer)}</span>
     </div>
@@ -333,12 +335,12 @@ export function CallStage({
         elementRef={(element) => {
           mainVideoRef.current = element;
         }}
-        label="Votre caméra en grand"
+        label={t('stage.selfVideoLarge')}
       />
     ) : (
-      <div className="stage__off" role="img" aria-label="Votre caméra est coupée">
+      <div className="stage__off" role="img" aria-label={t("stage.selfCameraOff")}>
         <VideoOffIcon size={34} />
-        <span>Votre caméra est coupée</span>
+        <span>{t('stage.selfCameraOff')}</span>
       </div>
     )
   ) : (
@@ -349,7 +351,7 @@ export function CallStage({
       elementRef={(element) => {
         mainVideoRef.current = element;
       }}
-      label="Flux vidéo de votre interlocuteur"
+      label={t('stage.remoteVideo')}
     />
   );
 
@@ -388,10 +390,10 @@ export function CallStage({
         ref={stageRef}
         className={`stage__remote ${inCall ? 'is-live' : ''} ${!showGrid && mainSpeaking ? 'is-speaking' : ''}`}
         onDoubleClick={inCall ? toggleFullscreen : undefined}
-        title={inCall ? 'Double-clic : plein écran · F plein écran · S échanger les vues' : undefined}
+        title={inCall ? t('stage.fullscreenHint') : undefined}
       >
         {showGrid ? (
-          <div className="stage__videos" role="group" aria-label="Participants de la conférence">
+          <div className="stage__videos" role="group" aria-label={t("stage.participants")}>
             {remotePeers.map((peer, index) => (
               <div
                 className="tile"
@@ -405,24 +407,24 @@ export function CallStage({
                     setPinnedId(peer.id);
                   }
                 }}
-                aria-label={`Agrandir ${peerLabel(peer)}`}
-                title="Cliquer pour agrandir"
+                aria-label={t('stage.pin', { name: peerLabel(peer) })}
+                title={t('stage.pin', { name: peerLabel(peer) })}
               >
                 {peer.stream ? (
                   <VideoSurface
                     stream={peer.stream}
                     className={`tile__video ${speaking[peer.id] ? 'is-speaking-glow' : ''}`}
                     volume={volume}
-                    label={`Participant ${index + 2}`}
+                    label={t('stage.participant', { n: index + 2 })}
                   />
                 ) : (
                   <div className="tile__waiting">
                     <UsersIcon size={22} />
-                    <span>Connexion…</span>
+                    <span>{t('stage.peerConnecting')}</span>
                   </div>
                 )}
                 <span className={`tile__label ${speaking[peer.id] ? 'is-speaking-text' : ''}`}>
-                  Participant {index + 2}
+                  {t('stage.participant', { n: index + 2 })}
                 </span>
                 {renderTileActions(peer)}
               </div>
@@ -433,7 +435,7 @@ export function CallStage({
         )}
 
         {pinnedPeer && stripPeers.length > 0 ? (
-          <div className="stage__strip" role="group" aria-label="Autres participants">
+          <div className="stage__strip" role="group" aria-label={t("stage.otherParticipants")}>
             {stripPeers.map((peer) => (
               <div
                 className="tile tile--mini"
@@ -447,8 +449,8 @@ export function CallStage({
                     setPinnedId(peer.id);
                   }
                 }}
-                aria-label={`Agrandir ${peerLabel(peer)}`}
-                title={`Agrandir ${peerLabel(peer)}`}
+                aria-label={t('stage.pin', { name: peerLabel(peer) })}
+                title={t('stage.pin', { name: peerLabel(peer) })}
               >
                 {peer.stream ? (
                   <VideoSurface
@@ -481,14 +483,14 @@ export function CallStage({
             <h2 className="stage__scrim-title">{scrimTitle}</h2>
             <p className="stage__scrim-text">
               {requestingMedia
-                ? 'Autorisez l’accès dans votre navigateur : votre image apparaît ci-dessous avant la mise en relation.'
+                ? t('stage.cameraPromptHint')
                 : lone
-                  ? 'Utilisez le bouton Ajouter pour faire entrer quelqu’un, ou attendez qu’on vous rejoigne.'
-                  : statusDetail || 'Vous serez mis en relation dès qu’une personne sera disponible.'}
+                  ? t('stage.waitingParticipantsHint')
+                  : statusDetail || t('stage.waitingMatch')}
             </p>
             {NEGOTIATING.includes(status) ? (
               <p className="stage__scrim-note">
-                Le son et l’image peuvent mettre quelques secondes à apparaître.
+                {t('stage.negotiationNote')}
               </p>
             ) : null}
           </div>
@@ -499,7 +501,7 @@ export function CallStage({
             <span className="stage__scrim-avatar" aria-hidden="true">
               <UsersIcon size={34} />
             </span>
-            <p className="stage__scrim-text">En attente du flux vidéo…</p>
+            <p className="stage__scrim-text">{t('stage.waitingStream')}</p>
           </div>
         ) : null}
 
@@ -511,25 +513,25 @@ export function CallStage({
           {status === 'reconnecting' ? (
             <span className="pill pill--warn" title="La connexion est instable, reprise en cours">
               <span className="dot dot--pulse" />
-              Reconnexion…
+              {t('stage.reconnecting')}
             </span>
           ) : (
             <span className={`pill ${inCall ? 'pill--ok' : 'pill--busy'}`}>
               <span className={`dot ${inCall ? 'dot--ok' : 'dot--pulse'}`} />
               {inCall
                 ? isGroup
-                  ? 'En conférence'
-                  : 'En conversation'
+                  ? t('stage.inConference')
+                  : t('stage.inConversation')
                 : requestingMedia
-                  ? 'Caméra'
+                  ? t('stage.cameraPrompt')
                   : SEARCHING.includes(status)
-                    ? 'Recherche'
-                    : 'Connexion'}
+                    ? t('stage.searching')
+                    : t('stage.connecting')}
             </span>
           )}
           {inCall ? (
             <>
-              <span className="pill pill--mono" title="Durée de la session en cours">
+              <span className="pill pill--mono" title={t("stage.duration")}>
                 {formatDuration(sessionSeconds)}
               </span>
               {isGroup ? (
@@ -537,8 +539,8 @@ export function CallStage({
                   className="pill pill--mono"
                   title={
                     sessionMax > 0
-                      ? `Conférence : ${membersCount} participant${membersCount > 1 ? 's' : ''} sur ${sessionMax} maximum`
-                      : `Conférence : ${membersCount} participant${membersCount > 1 ? 's' : ''}, sans limite`
+                      ? t('stage.maxMembers', { n: membersCount, max: sessionMax })
+                      : t('stage.maxMembersUnlimited', { n: membersCount })
                   }
                 >
                   {membersCount}{sessionMax > 0 ? `/${sessionMax}` : ''}
@@ -553,7 +555,7 @@ export function CallStage({
           quality?.bitrateKbps !== undefined &&
           inCall &&
           !isGroup ? (
-            <span className="pill pill--mono" title="Débit vidéo reçu">
+            <span className="pill pill--mono" title={t('stage.bitrate')}>
               {quality.bitrateKbps} kbps
             </span>
           ) : null}
@@ -562,11 +564,11 @@ export function CallStage({
               type="button"
               className="pill pill--action"
               onClick={toggleBrowserPip}
-              title="Afficher la vidéo en surimpression (Picture-in-Picture)"
-              aria-label="Afficher la vidéo en surimpression"
+              title={t('stage.browserPip')}
+              aria-label={t('stage.browserPip')}
             >
               <PipIcon size={14} />
-              Surimpression
+              {t('stage.pipAction')}
             </button>
           ) : null}
         </div>
@@ -582,8 +584,8 @@ export function CallStage({
             onDoubleClick={(event) => event.stopPropagation()}
             role="button"
             tabIndex={0}
-            aria-label={isGroup ? 'Déplacer votre caméra' : 'Appuyez pour échanger avec la grande vue'}
-            title={isGroup ? 'Glissez pour déplacer' : 'Appuyez pour agrandir · glissez pour déplacer'}
+            aria-label={isGroup ? t('stage.dragHint') : t('stage.swapAria')}
+            title={isGroup ? t('stage.dragHint') : t('stage.swapHint')}
           >
             {swap ? (
               remotePeers[0]?.stream ? (
@@ -591,7 +593,7 @@ export function CallStage({
                   stream={remotePeers[0].stream}
                   className="stage__local-video"
                   volume={volume}
-                  label="Flux de l’appelant"
+                  label={t('stage.remoteVideo')}
                 />
               ) : (
                 <div className="stage__local-off">
@@ -605,17 +607,17 @@ export function CallStage({
                 className="stage__local-video"
                 muted
                 mirrored
-                label="Votre caméra (miniature)"
+                label={t('stage.selfVideoPip')}
               />
             ) : (
               <div className="stage__local-off">
                 <VideoOffIcon size={22} />
-                <span>Caméra coupée</span>
+                <span>{t('stage.cameraOff')}</span>
               </div>
             )}
             <span className="stage__local-badge">
               {swap ? null : !micEnabled ? <MicOffIcon size={14} /> : null}
-              {swap ? 'Appelant' : 'Vous'}
+              {swap ? t('stage.caller') : t('stage.you')}
             </span>
           </div>
         ) : null}

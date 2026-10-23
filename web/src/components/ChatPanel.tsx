@@ -1,3 +1,4 @@
+import { getT, useT } from '../i18n';
 import { useEffect, useRef, useState } from 'react';
 import type { CallStatus, ChatMessage } from '../types';
 import { CloseIcon, SendIcon } from './Icons';
@@ -14,21 +15,23 @@ interface ChatPanelProps {
 }
 
 function sessionBanner(status: CallStatus): string | null {
+  const t = getT();
   switch (status) {
     case 'requesting-media':
-      return 'Activation de la caméra…';
+      return t('stage.cameraPrompt');
     case 'waiting':
     case 'ended':
-      return 'Recherche d’un interlocuteur…';
+      return t('stage.searching');
     case 'connecting':
     case 'reconnecting':
-      return 'Connexion à l’interlocuteur…';
+      return t('stage.connectingPeer');
     default:
       return null;
   }
 }
 
 export function ChatPanel({ open, messages, connected, status, maxRunes, onClose, onSend }: ChatPanelProps) {
+  const t = useT();
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -52,20 +55,20 @@ export function ChatPanel({ open, messages, connected, status, maxRunes, onClose
   const banner = connected ? null : sessionBanner(status);
 
   return (
-    <aside className={`chat ${open ? 'is-open' : ''}`} aria-hidden={!open} aria-label="Chat texte">
+    <aside className={`chat ${open ? 'is-open' : ''}`} aria-hidden={!open} aria-label={t("chat.panel")}>
       <header className="chat__header">
         <div>
-          <h2 className="chat__title">Chat</h2>
+          <h2 className="chat__title">{t("chat.title")}</h2>
           <p className="chat__subtitle">
-            {connected ? 'Connecté à l’interlocuteur' : 'Disponible pendant la conversation'}
+            {connected ? t('chat.connected') : t('chat.standby')}
           </p>
         </div>
-        <button type="button" className="icon-btn" onClick={onClose} aria-label="Fermer le chat">
+        <button type="button" className="icon-btn" onClick={onClose} aria-label={t("chat.close")}>
           <CloseIcon size={18} />
         </button>
       </header>
 
-      <div className="chat__list" ref={listRef} aria-live="polite" aria-label="Messages">
+      <div className="chat__list" ref={listRef} aria-live="polite" aria-label={t("chat.messages")}>
         {banner ? (
           <p className="chat__banner" role="status">
             {banner}
@@ -91,7 +94,7 @@ export function ChatPanel({ open, messages, connected, status, maxRunes, onClose
                 <p className="bubble__text">{message.text}</p>
                 <span className="bubble__meta">
                   {formatClock(message.at)}
-                  {message.from === 'me' ? (message.pending ? ' · envoi…' : ' · envoyé') : ''}
+                  {message.from === 'me' ? (message.pending ? t('chat.pending') : t('chat.sent')) : ''}
                 </span>
               </div>
             ),
@@ -110,13 +113,13 @@ export function ChatPanel({ open, messages, connected, status, maxRunes, onClose
           ref={inputRef}
           className="chat__input"
           placeholder={
-            connected ? 'Écrivez un message…' : 'Le chat sera disponible pendant la conversation'
+            connected ? t('chat.placeholder.live') : t('chat.placeholder.standby')
           }
           value={draft}
           rows={1}
           maxLength={maxRunes}
           disabled={!connected}
-          aria-label="Votre message"
+          aria-label={t("chat.input")}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {

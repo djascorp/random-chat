@@ -1,3 +1,4 @@
+import { getT } from '../i18n';
 import { S2C, type Envelope } from '../types';
 
 type Handler = (data: any, envelope: Envelope) => void;
@@ -111,8 +112,7 @@ export class SignalingClient {
         finish(() =>
           reject(
             new Error(
-              `connexion fermée avant « ${event} » (code ${closeEvent.code || 1006}) : ` +
-                'vérifiez ALLOWED_ORIGINS côté serveur',
+              getT()('signal.closedBefore', { event, code: closeEvent.code || 1006 }),
             ),
           ),
         );
