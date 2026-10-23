@@ -331,7 +331,6 @@ export function CallStage({
         stream={mainSoloStream}
         className="stage__video"
         muted
-        mirrored
         elementRef={(element) => {
           mainVideoRef.current = element;
         }}
@@ -606,7 +605,6 @@ export function CallStage({
                 stream={localStream}
                 className="stage__local-video"
                 muted
-                mirrored
                 label={t('stage.selfVideoPip')}
               />
             ) : (

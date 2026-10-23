@@ -279,6 +279,21 @@ export const PipIcon = ({ size = 20, className }: IconProps) =>
     <path d="M3 5.5h18v13H3V5.5Zm10 6.5h6v4.5h-6V12Z" />,
   );
 
+export const CheckIcon = ({ size = 20, className }: IconProps) =>
+  base(size, className, <path d="M5 12.5l4.5 4.5L19 7.5" />);
+
+export const RefreshIcon = ({ size = 20, className }: IconProps) =>
+  base(
+    size,
+    className,
+    <>
+      <path d="M20 11a8 8 0 0 0-14.2-4.5L4 8" />
+      <path d="M4 4v4h4" />
+      <path d="M4 13a8 8 0 0 0 14.2 4.5L20 16" />
+      <path d="M20 20v-4h-4" />
+    </>
+  );
+
 export const LinkIcon = ({ size = 20, className }: IconProps) =>
   base(
     size,

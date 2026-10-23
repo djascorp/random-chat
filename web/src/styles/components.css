@@ -979,6 +979,170 @@
   text-overflow: ellipsis;
 }
 
+/* Share dialog: every action reports itself. The status strip carries what is
+   running or what just happened, the field flashes on rotation, and the
+   regeneration is a quiet text action instead of the dialog's main CTA. */
+.share-status {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  animation: share-status-in 0.18s ease-out;
+}
+
+.share-status svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.share-status--pending {
+  border-color: var(--border-strong);
+}
+
+.share-status--success {
+  color: #b9e6c9;
+  border-color: var(--signal-border);
+  background: var(--signal-soft);
+}
+
+.share-status--error {
+  color: #f0b6bb;
+  border-color: var(--bad-border);
+  background: var(--bad-soft);
+}
+
+.share-status__body {
+  display: grid;
+  gap: 2px;
+}
+
+.share-status__hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 1px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: share-spin 0.7s linear infinite;
+}
+
+@keyframes share-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes share-status-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* While a new token is being minted the old one is still visible but marked
+   as about to become useless. */
+.share-row.is-stale {
+  opacity: 0.45;
+}
+
+.share-link.is-flash .share-row__input {
+  animation: share-link-flash 1.2s ease-out;
+}
+
+@keyframes share-link-flash {
+  0% {
+    border-color: var(--signal);
+    box-shadow: 0 0 0 4px rgba(76, 195, 138, 0.22);
+  }
+  100% {
+    border-color: var(--border);
+    box-shadow: none;
+  }
+}
+
+.share-link__foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+
+.share-regenerate {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 0;
+  font-size: 12.5px;
+  font-weight: 540;
+  color: var(--muted-strong);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+
+.share-regenerate:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.share-regenerate:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.share-regenerate .is-spinning {
+  animation: share-spin 0.9s linear infinite;
+}
+
+.share-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.share-note--foot {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.share-cap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.share-cap__apply {
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.share-actions {
+  justify-content: space-between;
+}
+
+.share-revoke:hover:not(:disabled) {
+  color: #ffd8dc;
+  border-color: var(--bad-border);
+  background: var(--bad-soft);
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
