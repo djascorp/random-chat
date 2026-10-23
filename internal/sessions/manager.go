@@ -26,6 +26,7 @@ type recorder interface {
 	CreateSession(ctx context.Context, s *storage.Session) error
 	AddSessionParticipant(ctx context.Context, sessionID, peerID string) error
 	EndSession(ctx context.Context, id string, at time.Time, status storage.SessionStatus, reason string) error
+	UpdateSessionShape(ctx context.Context, id, mode string, max int) error
 }
 
 // Manager keeps active sessions in memory and mirrors them to the store.
@@ -95,8 +96,14 @@ func (m *Manager) AddMember(id, peer string) (*storage.Session, bool) {
 	return s, true
 }
 
-// RemoveMember detaches a participant from a live session. It returns the
-// session and whether no member is left, in which case the caller ends it.
+// RemoveMember detaches a participant from a live session. It returns a
+// snapshot of the session and whether no member is left, in which case the
+// caller ends it.
+//
+// The snapshot is a copy: callers keep reading it after the lock is released
+// while other members may leave concurrently, so it must never alias the live
+// record. For the same reason the filter builds a fresh slice instead of
+// reusing the backing array in place.
 func (m *Manager) RemoveMember(id, peer string) (*storage.Session, bool) {
 	m.mu.Lock()
 	s, ok := m.active[id]
@@ -104,21 +111,21 @@ func (m *Manager) RemoveMember(id, peer string) (*storage.Session, bool) {
 		m.mu.Unlock()
 		return nil, false
 	}
-	kept := s.Participants[:0]
+	kept := make([]string, 0, len(s.Participants))
 	for _, p := range s.Participants {
 		if p != peer {
 			kept = append(kept, p)
 		}
 	}
-	// Preserve join order without aliasing surprises for concurrent readers:
-	// Participants() already hands out copies.
-	s.Participants = append([]string(nil), kept...)
+	s.Participants = kept
 	if m.byPeer[peer] == id {
 		delete(m.byPeer, peer)
 	}
 	empty := len(s.Participants) == 0
+	cpy := *s
+	cpy.Participants = append([]string(nil), s.Participants...)
 	m.mu.Unlock()
-	return s, empty
+	return &cpy, empty
 }
 
 // GroupSessions returns a snapshot of the live conferences, oldest first.
@@ -139,12 +146,68 @@ func (m *Manager) GroupSessions() []*storage.Session {
 	return out
 }
 
-// Get returns the active session with this id, if any.
+// Promote switches a solo session to a group conference. It is a no-op for
+// sessions that are already grouped or gone, and reports whether the switch
+// happened so callers can announce it exactly once.
+//
+// Promotion lifts the 1:1 cap: a solo room is created full (two members for a
+// cap of two), so keeping it would refuse every future arrival. The room
+// restarts uncapped — the default ceiling — and any member may set a new cap
+// afterwards.
+func (m *Manager) Promote(id string) bool {
+	m.mu.Lock()
+	s, ok := m.active[id]
+	if !ok || s.Mode != storage.SessionSolo {
+		m.mu.Unlock()
+		return false
+	}
+	s.Mode = storage.SessionGroup
+	s.MaxParticipants = 0
+	mode, max := s.Mode, s.MaxParticipants
+	m.mu.Unlock()
+
+	if m.store != nil {
+		m.persist(func(ctx context.Context) error {
+			return m.store.UpdateSessionShape(ctx, id, mode, max)
+		})
+	}
+	return true
+}
+
+// SetMax caps the conference size of a live session (0 lifts the cap). It
+// reports false when the session is gone. Lowering the cap below the current
+// headcount ejects nobody: only future arrivals are blocked.
+func (m *Manager) SetMax(id string, max int) bool {
+	m.mu.Lock()
+	s, ok := m.active[id]
+	if !ok {
+		m.mu.Unlock()
+		return false
+	}
+	s.MaxParticipants = max
+	mode := s.Mode
+	m.mu.Unlock()
+
+	if m.store != nil {
+		m.persist(func(ctx context.Context) error {
+			return m.store.UpdateSessionShape(ctx, id, mode, max)
+		})
+	}
+	return true
+}
+
+// Get returns a snapshot of the active session with this id, if any. The
+// copy keeps readers safe after the lock is released while the room evolves.
 func (m *Manager) Get(id string) (*storage.Session, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	s, ok := m.active[id]
-	return s, ok
+	if !ok {
+		return nil, false
+	}
+	cpy := *s
+	cpy.Participants = append([]string(nil), s.Participants...)
+	return &cpy, true
 }
 
 // ByPeer returns the active session a participant currently belongs to.

@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"random-chat/internal/config"
+	"random-chat/internal/invites"
 	"random-chat/internal/matching"
 	"random-chat/internal/metrics"
 	"random-chat/internal/moderation"
@@ -38,6 +39,7 @@ type HubOptions struct {
 	Matcher    *matching.Matcher
 	Moderation *moderation.Service
 	Metrics    *metrics.Metrics
+	Invites    *invites.Registry
 	Logger     *slog.Logger
 }
 
@@ -59,6 +61,8 @@ type Hub struct {
 	chatLimiter   *moderation.RateLimiter
 	reportLimiter *moderation.RateLimiter
 	signalLimiter *moderation.RateLimiter
+	inviteLimiter *moderation.RateLimiter
+	invites       *invites.Registry
 }
 
 // NewHub builds the hub and installs the origin policy on the upgrader.
@@ -67,6 +71,10 @@ func NewHub(opts HubOptions) *Hub {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	registry := opts.Invites
+	if registry == nil {
+		registry = invites.NewRegistry()
+	}
 	h := &Hub{
 		cfg:           opts.Config,
 		store:         opts.Store,
@@ -74,12 +82,14 @@ func NewHub(opts HubOptions) *Hub {
 		matcher:       opts.Matcher,
 		moderation:    opts.Moderation,
 		metrics:       opts.Metrics,
+		invites:       registry,
 		log:           logger,
 		clients:       make(map[string]*Client),
 		joinLimiter:   moderation.NewRateLimiter(opts.Config.JoinRatePerMin, 6),
 		chatLimiter:   moderation.NewRateLimiter(opts.Config.ChatRatePerMin, 15),
 		reportLimiter: moderation.NewRateLimiter(opts.Config.ReportRatePerMin, 3),
 		signalLimiter: moderation.NewRateLimiter(opts.Config.SignalRatePerMin, 120),
+		inviteLimiter: moderation.NewRateLimiter(opts.Config.ReportRatePerMin, 3),
 	}
 	h.upgrader = websocket.Upgrader{
 		ReadBufferSize:  4096,
@@ -113,6 +123,7 @@ func (h *Hub) Run(ctx context.Context) {
 			h.chatLimiter.Sweep(10 * time.Minute)
 			h.reportLimiter.Sweep(30 * time.Minute)
 			h.signalLimiter.Sweep(5 * time.Minute)
+			h.inviteLimiter.Sweep(30 * time.Minute)
 			h.log.Debug("hub stats",
 				"connections", h.Count(),
 				"sessions", h.sessions.ActiveCount(),
@@ -245,6 +256,14 @@ func (h *Hub) handle(c *Client, env Envelope) {
 		h.handleLeave(c, env)
 	case EvtSessionAdd:
 		h.handleAdd(c, env)
+	case EvtInviteCreate:
+		h.handleInviteCreate(c, env)
+	case EvtInviteRevoke:
+		h.handleInviteRevoke(c, env)
+	case EvtSessionJoin:
+		h.handleSessionJoin(c, env)
+	case EvtSessionUpdate:
+		h.handleSessionUpdate(c, env)
 	case EvtRTCOffer, EvtRTCAnswer:
 		h.handleSDP(c, env)
 	case EvtRTCICE:
@@ -357,8 +376,10 @@ func (h *Hub) handleLeave(c *Client, _ Envelope) {
 	c.Send(EvtStateChanged, StatePayload{State: string(matching.StateIdle)})
 }
 
-// handleAdd pulls one waiting peer into the caller's conference. This is the
-// Ajouter button: conferences grow on demand instead of forking new calls.
+// handleAdd pulls one waiting peer into the caller's session. This is the
+// Ajouter button: rooms grow on demand instead of forking new calls. A solo
+// call is promoted to a conference on the way in; the room learns about the
+// new shape before the newcomer is announced.
 func (h *Hub) handleAdd(c *Client, env Envelope) {
 	if !h.joinLimiter.Allow(c.id) {
 		h.penalize(c, env.Event)
@@ -371,17 +392,218 @@ func (h *Hub) handleAdd(c *Client, env Envelope) {
 		c.SendError("no_session", "aucune conférence active", env.Event)
 		return
 	}
-	if s.Mode != storage.SessionGroup {
-		c.SendError("solo_session", "l'ajout n'est possible qu'en conférence", env.Event)
-		return
-	}
-	if s.Full() {
+	// A solo room reads as full (two members for a cap of two) but Fill
+	// promotes it first, which lifts the 1:1 cap — so only grouped rooms are
+	// rejected here.
+	if s.Mode != storage.SessionSolo && s.Full() {
 		c.SendError("session_full", "la conférence est complète", env.Event)
 		return
 	}
-	if !h.matcher.Fill(sessionID) {
+	filled, promoted := h.matcher.Fill(sessionID)
+	if promoted {
+		h.metrics.SessionPromotions.Inc()
+		h.log.Info("session promoted", "session_id", sessionID, "via", "session.add")
+	}
+	if !filled {
 		c.SendError("empty_queue", "personne en attente pour le moment", env.Event)
 	}
+}
+
+// handleInviteCreate mints (or returns) the single active invitation link of
+// the caller's session. A supplied cap is applied to the session first.
+func (h *Hub) handleInviteCreate(c *Client, env Envelope) {
+	if !h.inviteLimiter.Allow(c.id) {
+		h.penalize(c, env.Event)
+		c.SendError("rate_limited", "trop d'invitations en peu de temps", env.Event)
+		return
+	}
+	sessionID := c.SessionID()
+	s, ok := h.sessions.Get(sessionID)
+	if !ok || !s.Has(c.id) {
+		c.SendError("no_session", "aucune session active", env.Event)
+		return
+	}
+	payload, err := decodeData[InviteCreatePayload](env)
+	if err != nil {
+		h.metrics.MessagesRejected.Inc()
+		c.SendError("malformed", "invitation invalide", env.Event)
+		return
+	}
+	if payload.MaxParticipants != nil {
+		max := *payload.MaxParticipants
+		if max < 0 || max == 1 {
+			c.SendError("invalid_limit", "le nombre maximal doit valoir 0 (sans contrainte) ou au moins 2", env.Event)
+			return
+		}
+		if h.sessions.SetMax(s.ID, max) {
+			if fresh, ok := h.sessions.Get(s.ID); ok {
+				s = fresh
+			}
+			h.broadcastSessionUpdated(s)
+		}
+	}
+	token := h.invites.ActiveOrCreate(s.ID, payload.Rotate)
+	h.metrics.InvitesCreated.Inc()
+	h.log.Info("invite created", "session_id", s.ID, "mode", s.Mode, "rotated", payload.Rotate)
+	c.Send(EvtInviteCreated, InviteCreatedPayload{
+		Token:           token,
+		Mode:            s.Mode,
+		MaxParticipants: s.MaxParticipants,
+	})
+}
+
+// handleInviteRevoke kills the session's link. Members stay; only future
+// arrivals through the link are blocked.
+func (h *Hub) handleInviteRevoke(c *Client, env Envelope) {
+	if !h.inviteLimiter.Allow(c.id) {
+		h.penalize(c, env.Event)
+		c.SendError("rate_limited", "trop d'invitations en peu de temps", env.Event)
+		return
+	}
+	sessionID := c.SessionID()
+	s, ok := h.sessions.Get(sessionID)
+	if !ok || !s.Has(c.id) {
+		c.SendError("no_session", "aucune session active", env.Event)
+		return
+	}
+	h.invites.Revoke(s.ID)
+	h.log.Info("invite revoked", "session_id", s.ID)
+	for _, id := range s.Members() {
+		if m := h.client(id); m != nil {
+			m.Send(EvtInviteRevoked, InviteRevokedPayload{SessionID: s.ID})
+		}
+	}
+}
+
+// handleSessionJoin enters a precise session through its invitation link:
+// direct access, no knock, no approval. The joiner's own search preferences
+// are never touched; Next and Leave keep using them.
+func (h *Hub) handleSessionJoin(c *Client, env Envelope) {
+	if c.State() != matching.StateIdle {
+		c.SendError("already_in_session", "vous êtes déjà en session", env.Event)
+		return
+	}
+	if !h.joinLimiter.Allow(c.id) {
+		h.penalize(c, env.Event)
+		c.SendError("rate_limited", "trop de recherches en peu de temps", env.Event)
+		return
+	}
+	if until, suspended := h.moderation.IPSuspendedUntil(c.ip); suspended {
+		c.SendError("suspended", "accès temporairement suspendu jusqu'à "+until.Format(time.RFC3339), env.Event)
+		return
+	}
+	if h.userSuspended(c.id) {
+		c.SendError("suspended", "accès temporairement suspendu", env.Event)
+		return
+	}
+	payload, err := decodeData[SessionJoinPayload](env)
+	if err != nil {
+		h.metrics.MessagesRejected.Inc()
+		c.SendError("malformed", "invitation invalide", env.Event)
+		return
+	}
+	if strings.TrimSpace(payload.Token) == "" {
+		c.SendError("invalid_token", "lien d'invitation invalide", env.Event)
+		return
+	}
+	sessionID, ok := h.invites.Resolve(payload.Token)
+	if !ok {
+		h.metrics.InviteRejected.Inc()
+		c.SendError("invalid_token", "lien d'invitation invalide ou révoqué", env.Event)
+		return
+	}
+	if _, alive := h.sessions.Get(sessionID); !alive {
+		h.invites.Revoke(sessionID)
+		h.metrics.InviteRejected.Inc()
+		c.SendError("invalid_token", "cette discussion est terminée", env.Event)
+		return
+	}
+	res := h.matcher.JoinSession(c, sessionID)
+	switch res.Err {
+	case "":
+		if res.Promoted {
+			h.metrics.SessionPromotions.Inc()
+			h.log.Info("session promoted", "session_id", sessionID, "via", "session.join")
+		}
+		h.metrics.InviteJoins.Inc()
+		h.log.Info("invite join", "session_id", sessionID, "peer", c.id, "members", len(res.Members)+1)
+	case matching.JoinAlreadyIn:
+		c.SendError("already_in_session", "vous êtes déjà en session", env.Event)
+	case matching.JoinSessionFull:
+		h.metrics.InviteRejected.Inc()
+		c.SendError("session_full", "cette discussion est complète", env.Event)
+	case matching.JoinBlocked:
+		h.metrics.InviteRejected.Inc()
+		c.SendError("blocked_from_session", "vous ne pouvez pas rejoindre cette discussion", env.Event)
+	default:
+		h.metrics.InviteRejected.Inc()
+		c.SendError("invalid_token", "lien d'invitation invalide ou révoqué", env.Event)
+	}
+}
+
+// handleSessionUpdate changes the member cap of the caller's live session.
+// Any member may change it: anonymous rooms have no owner. Lowering the cap
+// below the headcount ejects nobody; only newcomers are blocked.
+func (h *Hub) handleSessionUpdate(c *Client, env Envelope) {
+	if !h.joinLimiter.Allow(c.id) {
+		h.penalize(c, env.Event)
+		c.SendError("rate_limited", "trop de modifications en peu de temps", env.Event)
+		return
+	}
+	sessionID := c.SessionID()
+	s, ok := h.sessions.Get(sessionID)
+	if !ok || !s.Has(c.id) {
+		c.SendError("no_session", "aucune session active", env.Event)
+		return
+	}
+	payload, err := decodeData[SessionUpdatePayload](env)
+	if err != nil {
+		h.metrics.MessagesRejected.Inc()
+		c.SendError("malformed", "paramètre invalide", env.Event)
+		return
+	}
+	if payload.MaxParticipants < 0 || payload.MaxParticipants == 1 {
+		c.SendError("invalid_limit", "le nombre maximal doit valoir 0 (sans contrainte) ou au moins 2", env.Event)
+		return
+	}
+	if !h.sessions.SetMax(s.ID, payload.MaxParticipants) {
+		c.SendError("no_session", "aucune session active", env.Event)
+		return
+	}
+	if fresh, ok := h.sessions.Get(s.ID); ok {
+		s = fresh
+	}
+	h.log.Info("session cap updated", "session_id", s.ID, "max", s.MaxParticipants)
+	h.broadcastSessionUpdated(s)
+}
+
+// broadcastSessionUpdated tells every member that their room changed shape.
+func (h *Hub) broadcastSessionUpdated(s *storage.Session) {
+	payload := SessionUpdatedPayload{
+		SessionID:       s.ID,
+		Mode:            s.Mode,
+		MaxParticipants: s.MaxParticipants,
+	}
+	for _, id := range s.Members() {
+		if m := h.client(id); m != nil {
+			m.Send(EvtSessionUpdated, payload)
+		}
+	}
+}
+
+// userSuspended reports whether the visitor's own account is suspended.
+// Unknown visitors are not suspended; only the store knows otherwise.
+func (h *Hub) userSuspended(id string) bool {
+	if h.store == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	u, err := h.store.GetUser(ctx, id)
+	if err != nil {
+		return false
+	}
+	return u.IsSuspended(time.Now())
 }
 
 func (h *Hub) handleSDP(c *Client, env Envelope) {
@@ -672,6 +894,8 @@ func (h *Hub) removeMember(sessionID, peerID, reason string, status storage.Sess
 		if s, ok := h.sessions.End(sessionID, status, reason); ok {
 			h.metrics.SessionDuration.Observe(s.Duration(time.Now()))
 		}
+		// The link dies with the session: a token must never outlive its room.
+		h.invites.Revoke(sessionID)
 		if notifyRemoved && removed != nil {
 			removed.Send(EvtSessionEnded, endPayload())
 		}
@@ -682,6 +906,7 @@ func (h *Hub) removeMember(sessionID, peerID, reason string, status storage.Sess
 		if s, ok := h.sessions.End(sessionID, status, reason); ok {
 			h.metrics.SessionDuration.Observe(s.Duration(time.Now()))
 		}
+		h.invites.Revoke(sessionID)
 		if notifyRemoved && removed != nil {
 			removed.Send(EvtSessionEnded, endPayload())
 		}

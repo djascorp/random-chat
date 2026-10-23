@@ -278,3 +278,13 @@ export const PipIcon = ({ size = 20, className }: IconProps) =>
     className,
     <path d="M3 5.5h18v13H3V5.5Zm10 6.5h6v4.5h-6V12Z" />,
   );
+
+export const LinkIcon = ({ size = 20, className }: IconProps) =>
+  base(
+    size,
+    className,
+    <>
+      <path d="M10 14a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.7 1.7" />
+      <path d="M14 10a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.7-1.7" />
+    </>,
+  );

@@ -14,6 +14,7 @@ import (
 
 	"random-chat/internal/config"
 	"random-chat/internal/httpapi"
+	"random-chat/internal/invites"
 	"random-chat/internal/matching"
 	"random-chat/internal/metrics"
 	"random-chat/internal/moderation"
@@ -59,6 +60,8 @@ func main() {
 	})
 	go matcher.Run(ctx)
 
+	inviteRegistry := invites.NewRegistry()
+
 	hub := signaling.NewHub(signaling.HubOptions{
 		Config:     cfg,
 		Store:      store,
@@ -66,6 +69,7 @@ func main() {
 		Matcher:    matcher,
 		Moderation: moderationService,
 		Metrics:    registry,
+		Invites:    inviteRegistry,
 		Logger:     logger,
 	})
 	go hub.Run(ctx)
@@ -77,6 +81,7 @@ func main() {
 		Sessions:   sessionManager,
 		Moderation: moderationService,
 		Metrics:    registry,
+		Invites:    inviteRegistry,
 		Logger:     logger,
 	})
 

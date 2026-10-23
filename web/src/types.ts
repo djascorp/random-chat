@@ -107,6 +107,28 @@ export interface ServerErrorPayload {
   event?: string;
 }
 
+export interface InviteCreated {
+  token: string;
+  mode: SessionMode;
+  max_participants: number;
+}
+
+export interface InviteRevoked {
+  session_id: string;
+}
+
+export interface SessionUpdated {
+  session_id: string;
+  mode: SessionMode;
+  max_participants: number;
+}
+
+export interface InvitePreview {
+  mode: SessionMode;
+  members: number;
+  max_participants: number;
+}
+
 export interface ReportAck {
   report_id: string;
   blocked: boolean;
@@ -120,6 +142,10 @@ export const C2S = {
   sessionNext: 'session.next',
   sessionLeave: 'session.leave',
   sessionAdd: 'session.add',
+  sessionJoin: 'session.join',
+  sessionUpdate: 'session.update',
+  inviteCreate: 'invite.create',
+  inviteRevoke: 'invite.revoke',
   rtcOffer: 'rtc.offer',
   rtcAnswer: 'rtc.answer',
   rtcIce: 'rtc.ice',
@@ -137,6 +163,9 @@ export const S2C = {
   queueTimeout: 'queue.timeout',
   matchFound: 'match.found',
   sessionEnded: 'session.ended',
+  sessionUpdated: 'session.updated',
+  inviteCreated: 'invite.created',
+  inviteRevoked: 'invite.revoked',
   peerJoined: 'peer.joined',
   peerLeft: 'peer.left',
   chatMessage: 'chat.message',

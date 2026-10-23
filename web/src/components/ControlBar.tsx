@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { SessionMode } from '../types';
-import { ChatIcon, MicIcon, MicOffIcon, PhoneOffIcon, SkipIcon, UserPlusIcon, VideoIcon, VideoOffIcon, VolumeIcon, VolumeOffIcon } from './Icons';
+import { ChatIcon, LinkIcon, MicIcon, MicOffIcon, PhoneOffIcon, SkipIcon, UserPlusIcon, VideoIcon, VideoOffIcon, VolumeIcon, VolumeOffIcon } from './Icons';
 import { DeviceMenu } from './DeviceMenu';
 import { SearchPrefsMenu } from './SearchPrefs';
 import { SessionMenu } from './SessionMenu';
@@ -10,7 +10,6 @@ interface ControlBarProps {
   micEnabled: boolean;
   camEnabled: boolean;
   inCall: boolean;
-  isGroup: boolean;
   canAdd: boolean;
   chatOpen: boolean;
   unread: number;
@@ -24,12 +23,15 @@ interface ControlBarProps {
   dimmed: boolean;
   searchMode: SessionMode;
   searchMax: number;
+  sessionMax: number;
   onSearchPrefs: (mode: SessionMode, max: number) => void;
   onToggleMic: () => void;
   onToggleCam: () => void;
   onNext: () => void;
   onStop: () => void;
   onAdd: () => void;
+  onInvite: () => void;
+  onUpdateCap: (max: number) => void;
   onToggleChat: () => void;
   onReport: () => void;
   onBlock: () => void;
@@ -42,7 +44,6 @@ export function ControlBar({
   micEnabled,
   camEnabled,
   inCall,
-  isGroup,
   canAdd,
   chatOpen,
   unread,
@@ -54,12 +55,15 @@ export function ControlBar({
   dimmed,
   searchMode,
   searchMax,
+  sessionMax,
   onSearchPrefs,
   onToggleMic,
   onToggleCam,
   onNext,
   onStop,
   onAdd,
+  onInvite,
+  onUpdateCap,
   onToggleChat,
   onReport,
   onBlock,
@@ -149,19 +153,27 @@ export function ControlBar({
           <SkipIcon size={22} />
           <span className="ctl__label">{t('stage.caller')}</span>
         </button>
-        {isGroup ? (
-          <button
-            type="button"
-            className="ctl"
-            onClick={onAdd}
-            disabled={!canAdd}
-            aria-label={canAdd ? t('ctl.add') : t('ctl.add.full')}
-            title={canAdd ? t('ctl.add') : t('ctl.add.full')}
-          >
-            <UserPlusIcon size={20} />
-            <span className="ctl__label">{t('ctl.add').split(' ')[0]}</span>
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="ctl"
+          onClick={onAdd}
+          disabled={!canAdd}
+          aria-label={canAdd ? t('ctl.add') : t('ctl.add.full')}
+          title={canAdd ? t('ctl.add') : t('ctl.add.full')}
+        >
+          <UserPlusIcon size={20} />
+          <span className="ctl__label">{t('ctl.add').split(' ')[0]}</span>
+        </button>
+        <button
+          type="button"
+          className="ctl"
+          onClick={onInvite}
+          aria-label={t('ctl.invite')}
+          title={t("ctl.invite")}
+        >
+          <LinkIcon size={20} />
+          <span className="ctl__label">{t('ctl.invite').split(' ')[0]}</span>
+        </button>
         <button
           type="button"
           className="ctl ctl--danger"
@@ -218,7 +230,14 @@ export function ControlBar({
           <span className="ctl__label">{t('chat.title')}</span>
         </button>
 
-        {isGroup ? null : <SessionMenu inCall={inCall} onReport={onReport} onBlock={onBlock} />}
+        <SessionMenu
+          inCall={inCall}
+          sessionMax={sessionMax}
+          onReport={onReport}
+          onBlock={onBlock}
+          onInvite={onInvite}
+          onUpdateCap={onUpdateCap}
+        />
       </div>
     </div>
   );

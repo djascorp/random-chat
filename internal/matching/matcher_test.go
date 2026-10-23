@@ -318,13 +318,13 @@ func TestGroupRespectsSmallestCap(t *testing.T) {
 	}
 	// An explicit add pulls e into the first room, which a capped at 3.
 	rooms := manager.GroupSessions()
-	if !m.Fill(rooms[0].ID) {
+	if filled, _ := m.Fill(rooms[0].ID); !filled {
 		t.Fatal("Fill must pull e into the first room")
 	}
 	if got := len(matchPayloadOf(t, peers[4]).Peers); got != 3 {
 		t.Fatalf("first room has %d members after Fill, want 3", got)
 	}
-	if m.Fill(rooms[0].ID) {
+	if filled, _ := m.Fill(rooms[0].ID); filled {
 		t.Fatal("Fill must refuse once the cap is reached")
 	}
 }
@@ -349,7 +349,7 @@ func TestLateJoinerWaitsForExplicitFill(t *testing.T) {
 	if len(rooms) != 1 {
 		t.Fatalf("group sessions = %d, want 1", len(rooms))
 	}
-	if !m.Fill(rooms[0].ID) {
+	if filled, _ := m.Fill(rooms[0].ID); !filled {
 		t.Fatal("Fill must pull the fitting waiter into the room")
 	}
 
@@ -381,7 +381,7 @@ func TestFillRefusesFullRoom(t *testing.T) {
 		t.Fatalf("group sessions = %d, want 1", len(rooms))
 	}
 	// The room holds {a, b} at a's cap of 2; c waits for another room.
-	if m.Fill(rooms[0].ID) {
+	if filled, _ := m.Fill(rooms[0].ID); filled {
 		t.Fatal("Fill must refuse a room that reached its cap")
 	}
 	if got := manager.ActiveCount(); got != 1 {
@@ -499,6 +499,253 @@ func TestMatcherRunStopsOnContextCancel(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("matcher.Run did not return after cancellation")
 	}
+}
+
+// Fill on a solo call promotes it to a conference before drawing: the room
+// learns its new shape through session.updated ahead of peer.joined.
+func TestFillPromotesSoloSession(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	a, b := newFakePeer("a"), newFakePeer("b")
+	m.Join(a)
+	m.Join(b)
+	if got := manager.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+
+	c := newGroupPeer("c", 0)
+	m.Join(c)
+
+	var sessionID string
+	for _, p := range []*fakePeer{a, b} {
+		events := p.eventsNamed("match.found")
+		if len(events) != 1 {
+			t.Fatalf("peer %s received %d match.found events, want 1", p.id, len(events))
+		}
+		if payload, ok := events[0].payload.(matchPayloadData); ok {
+			sessionID = payload.SessionID
+		}
+	}
+
+	filled, promoted := m.Fill(sessionID)
+	if !filled || !promoted {
+		t.Fatalf("Fill = (%v, %v), want (true, true)", filled, promoted)
+	}
+	s, ok := manager.Get(sessionID)
+	if !ok || s.Mode != groupMode {
+		t.Fatalf("session mode = %v, want group", s)
+	}
+	for _, p := range []*fakePeer{a, b} {
+		updated := p.eventsNamed("session.updated")
+		if len(updated) != 1 {
+			t.Fatalf("peer %s received %d session.updated events, want 1", p.id, len(updated))
+		}
+		// The shape announcement must precede the newcomer announcement.
+		joined := p.eventsNamed("peer.joined")
+		if len(joined) != 1 {
+			t.Fatalf("peer %s received %d peer.joined events, want 1", p.id, len(joined))
+		}
+		if firstIndex(p, "session.updated") > firstIndex(p, "peer.joined") {
+			t.Fatalf("peer %s learned peer.joined before session.updated", p.id)
+		}
+	}
+}
+
+// Two simultaneous Fills on one solo call promote exactly once: a single
+// waiter is pulled in and the room announces its new shape a single time.
+func TestConcurrentFillPromotesOnce(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	a, b := newFakePeer("a"), newFakePeer("b")
+	m.Join(a)
+	m.Join(b)
+	c := newGroupPeer("c", 0)
+	m.Join(c)
+
+	var sessionID string
+	if events := a.eventsNamed("match.found"); len(events) == 1 {
+		if payload, ok := events[0].payload.(matchPayloadData); ok {
+			sessionID = payload.SessionID
+		}
+	}
+	if sessionID == "" {
+		t.Fatal("no session was created")
+	}
+
+	var wg sync.WaitGroup
+	results := make([][2]bool, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			filled, promoted := m.Fill(sessionID)
+			results[i] = [2]bool{filled, promoted}
+		}(i)
+	}
+	wg.Wait()
+
+	filled := 0
+	promoted := 0
+	for _, r := range results {
+		if r[0] {
+			filled++
+		}
+		if r[1] {
+			promoted++
+		}
+	}
+	if filled != 1 {
+		t.Fatalf("filled = %d, want the single waiter pulled in once", filled)
+	}
+	if promoted != 1 {
+		t.Fatalf("promotions = %d, want exactly 1", promoted)
+	}
+	for _, p := range []*fakePeer{a, b} {
+		if got := len(p.eventsNamed("session.updated")); got != 1 {
+			t.Fatalf("peer %s received %d session.updated events, want 1", p.id, got)
+		}
+	}
+	s, _ := manager.Get(sessionID)
+	if len(s.Members()) != 3 {
+		t.Fatalf("room has %d members, want 3", len(s.Members()))
+	}
+}
+
+// JoinSession honours the member cap under concurrency: ten simultaneous
+// joins on the last seat let exactly one peer in.
+func TestJoinSessionLastSeatSingleWinner(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	a, b := newGroupPeer("a", 0), newGroupPeer("b", 0)
+	m.Join(a)
+	m.Join(b)
+
+	var sessionID string
+	if events := a.eventsNamed("match.found"); len(events) == 1 {
+		if payload, ok := events[0].payload.(matchPayloadData); ok {
+			sessionID = payload.SessionID
+		}
+	}
+	manager.SetMax(sessionID, 3)
+
+	const contenders = 10
+	peers := make([]*fakePeer, contenders)
+	for i := range peers {
+		peers[i] = newFakePeer(fmt.Sprintf("joiner-%02d", i))
+	}
+	results := make([]JoinResult, contenders)
+	var wg sync.WaitGroup
+	for i := range peers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = m.JoinSession(peers[i], sessionID)
+		}(i)
+	}
+	wg.Wait()
+
+	won := 0
+	for _, r := range results {
+		if r.Err == "" {
+			won++
+		} else if r.Err != JoinSessionFull {
+			t.Fatalf("loser error = %q, want %q", r.Err, JoinSessionFull)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("winners = %d, want exactly 1", won)
+	}
+	s, _ := manager.Get(sessionID)
+	if len(s.Members()) != 3 {
+		t.Fatalf("room has %d members, want 3", len(s.Members()))
+	}
+}
+
+// A joiner blocked with any member is refused and the room is untouched.
+func TestJoinSessionRefusesBlockedPeer(t *testing.T) {
+	blocks := blockedSet{"a": {"evil": {}}}
+	m, manager := newTestMatcher(t, blocks, time.Minute)
+	a, b := newFakePeer("a"), newFakePeer("b")
+	m.Join(a)
+	m.Join(b)
+
+	var sessionID string
+	if events := a.eventsNamed("match.found"); len(events) == 1 {
+		if payload, ok := events[0].payload.(matchPayloadData); ok {
+			sessionID = payload.SessionID
+		}
+	}
+	before, _ := manager.Get(sessionID)
+	beforeCount := len(before.Members())
+
+	evil := newFakePeer("evil")
+	if res := m.JoinSession(evil, sessionID); res.Err != JoinBlocked {
+		t.Fatalf("JoinSession error = %q, want %q", res.Err, JoinBlocked)
+	}
+	after, _ := manager.Get(sessionID)
+	if len(after.Members()) != beforeCount {
+		t.Fatalf("room changed after a refused join: %d members, want %d", len(after.Members()), beforeCount)
+	}
+	if evil.State() == StateInCall {
+		t.Fatal("the refused joiner must not be in a call")
+	}
+}
+
+// JoinSession respects the newcomer's own cap: a max=2 caller never lands in
+// a room that would hold 3.
+func TestJoinSessionRespectsNewcomerCap(t *testing.T) {
+	m, _ := newTestMatcher(t, nil, time.Minute)
+	a, b := newGroupPeer("a", 0), newGroupPeer("b", 0)
+	m.Join(a)
+	m.Join(b)
+
+	var sessionID string
+	if events := a.eventsNamed("match.found"); len(events) == 1 {
+		if payload, ok := events[0].payload.(matchPayloadData); ok {
+			sessionID = payload.SessionID
+		}
+	}
+	picky := newGroupPeer("picky", 2)
+	if res := m.JoinSession(picky, sessionID); res.Err != JoinSessionFull {
+		t.Fatalf("JoinSession error = %q, want %q", res.Err, JoinSessionFull)
+	}
+}
+
+// JoinSession on a solo room promotes it and announces the shape first.
+func TestJoinSessionPromotesSolo(t *testing.T) {
+	m, manager := newTestMatcher(t, nil, time.Minute)
+	a, b := newFakePeer("a"), newFakePeer("b")
+	m.Join(a)
+	m.Join(b)
+
+	var sessionID string
+	if events := a.eventsNamed("match.found"); len(events) == 1 {
+		if payload, ok := events[0].payload.(matchPayloadData); ok {
+			sessionID = payload.SessionID
+		}
+	}
+	guest := newFakePeer("guest")
+	res := m.JoinSession(guest, sessionID)
+	if res.Err != "" || !res.Promoted {
+		t.Fatalf("JoinSession = %+v, want success with promotion", res)
+	}
+	s, _ := manager.Get(sessionID)
+	if s.Mode != groupMode || len(s.Members()) != 3 {
+		t.Fatalf("room = mode %q with %d members, want group with 3", s.Mode, len(s.Members()))
+	}
+	if got := len(guest.eventsNamed("match.found")); got != 1 {
+		t.Fatalf("guest received %d match.found events, want 1", got)
+	}
+}
+
+// firstIndex returns the position of the first event with this name in the
+// peer's full log, for ordering checks across event kinds.
+func firstIndex(p *fakePeer, name string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, e := range p.events {
+		if e.event == name {
+			return i
+		}
+	}
+	return -1
 }
 
 type blockedSet map[string]map[string]struct{}

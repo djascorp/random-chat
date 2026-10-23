@@ -73,6 +73,31 @@ func (o Options) prometheus(w http.ResponseWriter, _ *http.Request) {
 	o.Metrics.WritePrometheus(w)
 }
 
+// invitePreview answers the invitation screen before the camera is on: the
+// discussion shape (type, headcount, cap) without any session or member id.
+// Unknown tokens report not_found, revoked or ended links their own error so
+// the UI can word the dead end precisely. Never cached: it mirrors live state.
+func (o Options) invitePreview(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	sessionID, ok := o.Invites.Resolve(token)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+		return
+	}
+	s, alive := o.Sessions.Get(sessionID)
+	if !alive {
+		o.Invites.Revoke(sessionID)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session_ended"})
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"mode":             s.Mode,
+		"members":          len(s.Members()),
+		"max_participants": s.MaxParticipants,
+	})
+}
+
 func (o Options) adminStats(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := withTimeout(r, 5*time.Second)
 	defer cancel()

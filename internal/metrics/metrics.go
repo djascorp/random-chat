@@ -121,6 +121,11 @@ type Metrics struct {
 	Suspensions Counter
 	Violations  Counter
 
+	InvitesCreated    Counter
+	InviteJoins       Counter
+	InviteRejected    Counter
+	SessionPromotions Counter
+
 	MatchWait       *Histogram
 	SignalLatency   *Histogram
 	SessionDuration *Histogram
@@ -156,6 +161,10 @@ func (m *Metrics) Snapshot() map[string]any {
 		"reports":               m.Reports.Value(),
 		"blocks":                m.Blocks.Value(),
 		"suspensions":           m.Suspensions.Value(),
+		"invites_created":       m.InvitesCreated.Value(),
+		"invite_joins":          m.InviteJoins.Value(),
+		"invite_rejected":       m.InviteRejected.Value(),
+		"session_promotions":    m.SessionPromotions.Value(),
 		"match_wait_avg_ms":     round(m.MatchWait.Mean()),
 		"match_wait_p95_ms":     round(m.MatchWait.Quantile(0.95)),
 		"signal_latency_p95_ms": round(m.SignalLatency.Quantile(0.95)),
@@ -188,6 +197,10 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		{"randomchat_blocks_total", "Blocks created by users", "counter", m.Blocks.Value()},
 		{"randomchat_suspensions_total", "Automatic suspensions issued", "counter", m.Suspensions.Value()},
 		{"randomchat_violations_total", "Rate-limit violations observed", "counter", m.Violations.Value()},
+		{"randomchat_invites_created_total", "Invitation links minted", "counter", m.InvitesCreated.Value()},
+		{"randomchat_invite_joins_total", "Sessions entered through an invitation link", "counter", m.InviteJoins.Value()},
+		{"randomchat_invite_rejected_total", "Invitation joins refused", "counter", m.InviteRejected.Value()},
+		{"randomchat_session_promotions_total", "Solo sessions promoted to group conferences", "counter", m.SessionPromotions.Value()},
 		{"randomchat_uptime_seconds", "Process uptime", "gauge", int64(m.Uptime().Seconds())},
 	}
 	for _, e := range entries {

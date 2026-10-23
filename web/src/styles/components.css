@@ -965,6 +965,20 @@
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.07);
 }
 
+/* Invitation link row: the readonly URL takes the room, actions hug it. */
+.share-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.share-row__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;

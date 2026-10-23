@@ -38,8 +38,8 @@ type Client struct {
 	// where 0 means the caller sets no constraint.
 	mode            string
 	maxParticipants int
-	matchedAt time.Time
-	joinedAt  time.Time
+	matchedAt       time.Time
+	joinedAt        time.Time
 
 	ip          string
 	userAgent   string

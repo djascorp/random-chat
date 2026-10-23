@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"random-chat/internal/config"
+	"random-chat/internal/invites"
 	"random-chat/internal/metrics"
 	"random-chat/internal/moderation"
 	"random-chat/internal/sessions"
@@ -22,6 +23,7 @@ type Options struct {
 	Sessions   *sessions.Manager
 	Moderation *moderation.Service
 	Metrics    *metrics.Metrics
+	Invites    *invites.Registry
 	Logger     *slog.Logger
 }
 
@@ -32,6 +34,7 @@ func NewRouter(o Options) http.Handler {
 	mux.HandleFunc("GET /api/health", o.health)
 	mux.HandleFunc("GET /api/config", o.publicConfig)
 	mux.HandleFunc("GET /api/stats", o.stats)
+	mux.HandleFunc("GET /api/invites/{token}", o.invitePreview)
 	mux.HandleFunc("GET /metrics", o.prometheus)
 	mux.HandleFunc("GET /ws", o.Hub.ServeWS)
 

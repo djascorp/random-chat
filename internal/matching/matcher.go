@@ -148,15 +148,33 @@ func (m *Matcher) pairLocked() {
 	m.formGroupsLocked()
 }
 
-// Fill pulls one waiting group peer into the given conference. It reports
-// whether anyone was available; the hub maps a miss to an "empty queue" error
-// for the Ajouter button.
-func (m *Matcher) Fill(sessionID string) bool {
+// Fill pulls one waiting group peer into the given session. It reports
+// whether anyone was available and whether the room was promoted from solo to
+// group on the way in; the hub maps a miss to an "empty queue" error for the
+// Ajouter button and counts promotions. A solo room is promoted before the
+// draw so the Ajouter button works there too, and the existing members learn
+// about the new shape through session.updated before peer.joined.
+func (m *Matcher) Fill(sessionID string) (filled, promoted bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.sessions.Get(sessionID)
-	if !ok || s.Mode != groupMode || s.Full() {
-		return false
+	if !ok {
+		return false, false
+	}
+	if s.Mode == soloMode {
+		// A solo room is born full (two members for a cap of two): it must
+		// be promoted — which lifts the 1:1 cap — before any room check.
+		if !m.sessions.Promote(s.ID) {
+			return false, false
+		}
+		promoted = true
+		if fresh, ok := m.sessions.Get(sessionID); ok {
+			s = fresh
+		}
+		m.announceUpdatedLocked(s)
+	}
+	if s.Full() {
+		return false, promoted
 	}
 	members := s.Members()
 	for _, p := range m.queue.Snapshot() {
@@ -167,9 +185,79 @@ func (m *Matcher) Fill(sessionID string) bool {
 			continue
 		}
 		m.joinSessionLocked(s.ID, p)
-		return true
+		return true, promoted
 	}
-	return false
+	return false, promoted
+}
+
+// JoinError codes returned by JoinSession; they map one-to-one to the stable
+// server.error codes the client localises.
+const (
+	JoinNoSession   = "no_session"
+	JoinSessionFull = "session_full"
+	JoinBlocked     = "blocked_from_session"
+	JoinAlreadyIn   = "already_in_session"
+)
+
+// JoinResult is the outcome of pulling a peer into a live session by id,
+// which is how invitation links enter: the peer never waited in the queue.
+type JoinResult struct {
+	Session  *storage.Session
+	Members  []string
+	Promoted bool
+	Err      string
+}
+
+// JoinSession moves p into a live session, promoting a solo room to a group
+// conference first. Every validation runs under the matcher lock, so ten
+// simultaneous joins on the last seat let exactly one in. The existing
+// members receive session.updated before peer.joined when the room changed
+// shape, and the newcomer receives the full member list.
+func (m *Matcher) JoinSession(p Peer, sessionID string) JoinResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if p.State() == StateInCall || p.State() == StateMatched {
+		return JoinResult{Err: JoinAlreadyIn}
+	}
+	s, ok := m.sessions.Get(sessionID)
+	if !ok {
+		return JoinResult{Err: JoinNoSession}
+	}
+	members := s.Members()
+	if m.blockedWithAny(p, members) {
+		return JoinResult{Err: JoinBlocked}
+	}
+	var promoted bool
+	if s.Mode == soloMode {
+		// Promote before the room check: a solo room is born full, and the
+		// promotion lifts the 1:1 cap.
+		if !m.sessions.Promote(s.ID) {
+			return JoinResult{Err: JoinNoSession}
+		}
+		promoted = true
+		if fresh, ok := m.sessions.Get(sessionID); ok {
+			s = fresh
+		}
+		m.announceUpdatedLocked(s)
+		members = s.Members()
+	}
+	if !s.Fits(1, p.MaxParticipants()) {
+		return JoinResult{Err: JoinSessionFull}
+	}
+	m.joinSessionLocked(s.ID, p)
+	return JoinResult{Session: s, Members: members, Promoted: promoted}
+}
+
+// announceUpdatedLocked tells the live members that their room changed shape
+// (promotion or cap change from the matcher side). Called with the mutex held.
+func (m *Matcher) announceUpdatedLocked(s *storage.Session) {
+	payload := sessionUpdatedPayload(s.ID, s.Mode, s.MaxParticipants)
+	for _, id := range s.Members() {
+		if q := m.live[id]; q != nil {
+			q.Send("session.updated", payload)
+		}
+	}
 }
 
 // joinSessionLocked moves a waiter into a live session and notifies everyone:
@@ -407,6 +495,10 @@ func matchFoundPayload(s *storage.Session, peers []string, peerID, role string, 
 
 func peerJoinedPayload(sessionID, peerID string) map[string]any {
 	return map[string]any{"session_id": sessionID, "peer_id": peerID}
+}
+
+func sessionUpdatedPayload(sessionID, mode string, max int) map[string]any {
+	return map[string]any{"session_id": sessionID, "mode": mode, "max_participants": max}
 }
 
 // Run sweeps the queue for peers that waited longer than the timeout, until ctx

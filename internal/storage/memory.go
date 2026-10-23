@@ -174,6 +174,21 @@ func (m *Memory) EndSession(_ context.Context, id string, at time.Time, status S
 	return nil
 }
 
+// UpdateSessionShape records a promotion or a cap change on a live session so
+// the audit trail stays exact after the room evolves.
+func (m *Memory) UpdateSessionShape(_ context.Context, id, mode string, max int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return ErrNotFound
+	}
+	s.Mode = mode
+	s.MaxParticipants = max
+	m.sessions[id] = s
+	return nil
+}
+
 func (m *Memory) CreateReport(_ context.Context, r *Report) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

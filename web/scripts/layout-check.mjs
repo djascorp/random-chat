@@ -317,6 +317,51 @@ try {
     await sleep(400);
   }
 
+  // Share dialog on a laptop, opened from the live call bar: the link is
+  // minted for real, so this covers the dialog, the readonly URL row and
+  // the cap stepper in one shot.
+  await a.send('Emulation.setDeviceMetricsOverride', { width: 1180, height: 700, deviceScaleFactor: 1, mobile: false });
+  await sleep(300);
+  await a.eval(`[...document.querySelectorAll('.ctl')].find((el) => (el.getAttribute('aria-label') || '').startsWith('Invit'))?.click()`);
+  await waitFor(a, `document.querySelector('.share-row__input')?.value?.length > 0`, { label: 'share dialog to mint a link' });
+  await sleep(400);
+  const share = JSON.parse(
+    await a.eval(`(() => {
+      const modal = document.querySelector('.modal');
+      const r = modal ? modal.getBoundingClientRect() : null;
+      return JSON.stringify({
+        open: !!modal,
+        width: r ? Math.round(r.width) : null,
+        fits: r ? r.top >= 0 && r.bottom <= innerHeight + 1 : null,
+      });
+    })()`),
+  );
+  console.log(`share-1180x700  modal=${share.width}px fits=${share.fits}`);
+  record('share-1180x700', 'dialog opens with a minted link', share.open === true, String(share.open));
+  record('share-1180x700', 'dialog fits the viewport', share.fits === true, `width=${share.width}px`);
+  await a.screenshot('share-laptop-1180x700');
+  await a.eval(`document.querySelector('.modal .icon-btn')?.click()`);
+  await sleep(400);
+
+  // Invitation screen on a phone, with a dead link: needs no live session,
+  // and the dead template shares the hero layout with the ready one.
+  await b.send('Page.navigate', { url: `${APP}/j/0123456789abcdef0123456789abcdef` });
+  await waitFor(
+    b,
+    `document.body.textContent.includes('ne fonctionne plus') || document.body.textContent.includes('no longer works')`,
+    { label: 'join screen to show the dead link' },
+  );
+  await b.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await sleep(500);
+  const join = JSON.parse(
+    await b.eval(`(() => JSON.stringify({
+      scroll: document.documentElement.scrollHeight - document.documentElement.clientHeight,
+    }))()`),
+  );
+  console.log(`join-390x844  scroll=${join.scroll}px`);
+  record('join-390x844', 'dead-link screen does not scroll', join.scroll <= 1, `${join.scroll}px of overflow`);
+  await b.screenshot('join-phone-390x844');
+
   // Landing page on a phone.
   await a.eval(`document.querySelector('.ctl--danger').click()`);
   await sleep(600);

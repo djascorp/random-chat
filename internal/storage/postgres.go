@@ -132,6 +132,20 @@ func (p *Postgres) EndSession(ctx context.Context, id string, at time.Time, stat
 	return nil
 }
 
+// UpdateSessionShape records a promotion or a cap change on a live session.
+func (p *Postgres) UpdateSessionShape(ctx context.Context, id, mode string, max int) error {
+	res, err := p.db.ExecContext(ctx, `
+		UPDATE sessions SET mode = $2, max_participants = $3 WHERE id = $1`,
+		id, mode, max)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (p *Postgres) CreateReport(ctx context.Context, r *Report) error {
 	_, err := p.db.ExecContext(ctx, `
 		INSERT INTO reports (id, reporter_id, target_id, session_id, category, reason, details, status, created_at)

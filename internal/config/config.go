@@ -14,7 +14,9 @@ import (
 // Clients negotiate against it during the handshake so a stale SPA can be detected.
 // Version 2 adds conferences: member lists, peer join/leave and per-recipient
 // signaling on top of the 1:1 protocol.
-const ProtocolVersion = "2"
+// Version 3 adds invitation links (invite.create/revoke, session.join/update,
+// session.updated) and solo-to-group promotion.
+const ProtocolVersion = "3"
 
 // IceServer mirrors the subset of the RTCIceServer dictionary the browser accepts.
 type IceServer struct {

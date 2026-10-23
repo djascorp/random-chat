@@ -21,6 +21,7 @@ architecture designed to grow (multi-instance, SFU) without a rewrite.
 | Metrics (`/metrics`, `/api/stats`) and audit log | ✅ |
 | Token-protected admin API | ✅ |
 | Group conferences (Solo/Group search, member cap, Ajouter button, mesh) | ✅ |
+| Invitation links (solo→group promotion, pre-set `?mode=&max=` links, revocable) | ✅ |
 | PostgreSQL persistence with in-memory fallback | ✅ |
 | Responsive UI with dark theme, mobile included | ✅ |
 | Unit tests, WebSocket integration tests, `-race` | ✅ |
@@ -144,11 +145,18 @@ number one cause of connection failure in production.
 
 ## 5. WebSocket protocol
 
-Endpoint: `GET /ws?cid=<client-id>`
+Endpoint: `GET /ws?cid=<client-id>` (protocol version `3`)
 
 The search shape (Solo vs conference plus the member cap) is chosen on the
 landing screen and can be changed at any time from the control bar menu;
 `Suivant` always searches with the current setting (`session.next` carries it).
+
+Two URL shapes carry a choice that is already made: `/?mode=group&max=5`
+opens the landing screen pre-set to a capped group search (invalid values are
+silently ignored), and `/j/<token>` opens an invitation screen for one
+precise discussion — preview first, then direct entry, no knocking. The token
+is opaque (never the session id) and the client builds the full URL itself,
+so the server needs no base-URL setting.
 
 The `cid` is an opaque token stored in `localStorage`
 (`^[a-z0-9-]{8,64}$`). It lets blocks and suspensions survive a page reload
@@ -165,7 +173,11 @@ Every frame is a JSON envelope: `{ "event": "...", "data": { ... } }`.
 | `queue.cancel` | Cancel the search |
 | `session.next` | Close the session and search again |
 | `session.leave` | Close the session without searching |
-| `session.add` | Pull one waiting peer into your conference (group only) |
+| `session.add` | Pull one waiting peer into your session (promotes a solo call to a conference) |
+| `session.join` | Enter a precise session through its invitation link (`{ token }`, idle only) |
+| `session.update` | Change your session's member cap (`{ max_participants }`, 0 = no cap) |
+| `invite.create` | Get the session's link (`{ max_participants?, rotate? }`, members only) |
+| `invite.revoke` | Kill the session's link (members only, nobody is ejected) |
 | `rtc.offer` / `rtc.answer` | Forward an SDP description (`to` selects the recipient in a conference) |
 | `rtc.ice` | Forward an ICE candidate (`to` selects the recipient in a conference) |
 | `chat.send` | Send a text message (broadcast to every other member) |
@@ -179,6 +191,9 @@ Every frame is a JSON envelope: `{ "event": "...", "data": { ... } }`.
 | `server.hello` | Client id, protocol version, ICE servers, limits |
 | `queue.waiting` / `queue.canceled` / `queue.timeout` | Queue state |
 | `match.found` | Session created, with `peers[]`, `mode`, `max_participants` (plus `role` in 1:1) |
+| `session.updated` | The room changed shape: promotion solo → group, or a new member cap |
+| `invite.created` | The session's link (`{ token, mode, max_participants }`, reply to `invite.create`) |
+| `invite.revoked` | The session's link is dead (open share dialogs disable themselves) |
 | `peer.joined` / `peer.left` | Conference roster changes |
 | `session.ended` | Session end with the reason |
 | `session.state` | Current state (`idle`, `waiting`, …) |
@@ -333,6 +348,7 @@ coverage.
 | --- | --- |
 | `GET /api/health` | Liveness probe (connections, sessions, queue) |
 | `GET /api/stats` | Public aggregate counters, used by the home page |
+| `GET /api/invites/{token}` | Public invitation preview (`mode`, `members`, `max_participants`, `no-store`) |
 | `GET /metrics` | Prometheus format, no authentication |
 
 Indicators to watch first:
@@ -379,7 +395,8 @@ Indicators to watch first:
 - **The SPA and the API share one image**: simple to operate; split (CDN) if
   static traffic grows.
 - **No session resume after reload**: the WebRTC session is lost, a new
-  search is required.
+  search is required. Re-entering through the session's invitation link while
+  it is still alive is an approximate substitute, not a real resume.
 - **Chat is not auto-moderated.** Messages pass through without being stored;
   only reports are persisted.
 

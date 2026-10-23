@@ -9,14 +9,17 @@ interface LandingProps {
   activeSessions: number | null;
   matchesTotal: number | null;
   turnConfigured: boolean;
+  initialMode: SessionMode;
+  initialMax: number;
+  preset: boolean;
   onStart: (mode: SessionMode, max: number) => void;
   busy: boolean;
 }
 
-export function Landing({ online, activeSessions, matchesTotal, turnConfigured, onStart, busy }: LandingProps) {
+export function Landing({ online, activeSessions, matchesTotal, turnConfigured, initialMode, initialMax, preset, onStart, busy }: LandingProps) {
   const t = useT();
-  const [mode, setMode] = useState<SessionMode>('solo');
-  const [max, setMax] = useState('');
+  const [mode, setMode] = useState<SessionMode>(initialMode);
+  const [max, setMax] = useState(initialMax === 0 ? '' : String(initialMax));
 
   const steps = [
     { icon: <BoltIcon size={22} />, title: t('steps.1.title'), text: t('steps.1.text') },
@@ -62,6 +65,7 @@ export function Landing({ online, activeSessions, matchesTotal, turnConfigured, 
                 : t('landing.cta.solo')}
           </button>
           <span className="hero__hint">
+            {preset ? `${t('landing.preset')} ` : null}
             {turnConfigured ? t('landing.hint.turn') : t('landing.hint.p2p')}
           </span>
         </div>

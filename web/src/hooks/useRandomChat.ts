@@ -7,6 +7,8 @@ import {
   type ChatMessage,
   type ICEPayload,
   type IncomingChatMessage,
+  type InviteCreated,
+  type InviteRevoked,
   type MatchFound,
   type PeerJoined,
   type PeerLeft,
@@ -16,6 +18,7 @@ import {
   type ServerHello,
   type SessionEnded,
   type SessionMode,
+  type SessionUpdated,
   type SDPPayload,
   type Toast,
 } from '../types';
@@ -73,6 +76,12 @@ export function useRandomChat() {
   const [queuePosition, setQueuePosition] = useState(0);
   const [chatOpen, setChatOpenState] = useState(false);
   const [unread, setUnread] = useState(0);
+  // Last invitation link minted for the current session, if any.
+  const [invite, setInvite] = useState<InviteCreated | null>(null);
+  // True once the session link is known dead (revoked): share dialogs disable.
+  const [inviteRevoked, setInviteRevoked] = useState(false);
+  // Link-join failure shown on the invitation screen (not a toast only).
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   const signalingRef = useRef<SignalingClient | null>(null);
   const connectingRef = useRef<Promise<SignalingClient> | null>(null);
@@ -82,6 +91,7 @@ export function useRandomChat() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const sessionRef = useRef<string>('');
   const myIdRef = useRef('');
+  const sessionModeRef = useRef<SessionMode>('solo');
   const prefsRef = useRef<{ mode: SessionMode; max: number }>({ mode: 'solo', max: 0 });
   const statusRef = useRef<CallStatus>('idle');
   const chatOpenRef = useRef(false);
@@ -150,6 +160,9 @@ export function useRandomChat() {
     setMembers([]);
     setQuality(null);
     setSessionSeconds(0);
+    // The link dies with the session: a stale token must never be reshown.
+    setInvite(null);
+    setInviteRevoked(false);
   }, [clearTimers]);
 
   const setPeerStream = useCallback((peerId: string, stream: MediaStream | null) => {
@@ -233,12 +246,21 @@ export function useRandomChat() {
     }
   }, []);
 
+  const applySessionShape = useCallback((mode: SessionMode, max: number) => {
+    sessionModeRef.current = mode;
+    setSessionMode(mode);
+    setSessionMax(max);
+  }, []);
+
   const wireSignaling = useCallback((client: SignalingClient) => {
     client.on(S2C.hello, (data: ServerHello) => handlersRef.current.onHello(data));
     client.on(S2C.queueWaiting, () => handlersRef.current.onQueueWaiting());
     client.on(S2C.queueCanceled, () => handlersRef.current.onQueueCanceled());
     client.on(S2C.queueTimeout, () => handlersRef.current.onQueueTimeout());
     client.on(S2C.matchFound, (data: MatchFound) => handlersRef.current.onMatchFound(data));
+    client.on(S2C.sessionUpdated, (data: SessionUpdated) => handlersRef.current.onSessionUpdated(data));
+    client.on(S2C.inviteCreated, (data: InviteCreated) => handlersRef.current.onInviteCreated(data));
+    client.on(S2C.inviteRevoked, (data: InviteRevoked) => handlersRef.current.onInviteRevoked(data));
     client.on(S2C.sessionEnded, (data: SessionEnded) => handlersRef.current.onSessionEnded(data));
     client.on(S2C.peerJoined, (data: PeerJoined) => handlersRef.current.onPeerJoined(data));
     client.on(S2C.peerLeft, (data: PeerLeft) => handlersRef.current.onPeerLeft(data));
@@ -321,6 +343,36 @@ export function useRandomChat() {
     setSearchMax(safeMax);
   }, []);
 
+  /** Captures camera and microphone; shared by queue search and link joins. */
+  const acquireMedia = useCallback(async (): Promise<boolean> => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      const message = t('toast.cameraDenied.body');
+      setError(message);
+      applyStatus('error', message);
+      return false;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+      setMicEnabled(true);
+      setCamEnabled(true);
+      for (const track of stream.getAudioTracks()) track.enabled = true;
+      for (const track of stream.getVideoTracks()) track.enabled = true;
+      await refreshDevices();
+      return true;
+    } catch (err) {
+      const message = describeMediaError(err);
+      setError(message);
+      applyStatus('error', message);
+      pushToast('error', t('toast.cameraDenied.title'), message);
+      return false;
+    }
+  }, [applyStatus, pushToast, refreshDevices]);
+
   const start = useCallback(
     async (mode: SessionMode = 'solo', max = 0) => {
       chooseSearchPrefs(mode, max);
@@ -329,35 +381,46 @@ export function useRandomChat() {
       setUnread(0);
       applyStatus('requesting-media', t('status.cameraPrompt'));
 
-      if (!navigator.mediaDevices?.getUserMedia) {
-        const message = t('toast.cameraDenied.body');
-        setError(message);
-        applyStatus('error', message);
-        return;
-      }
+      if (!(await acquireMedia())) return;
+      await joinQueue();
+    },
+    [acquireMedia, applyStatus, chooseSearchPrefs, joinQueue],
+  );
 
+  /**
+   * Enters a precise session through its invitation link: same media path as
+   * start(), then session.join — without touching the user's own search
+   * preferences, so Next keeps using them afterwards.
+   */
+  const joinByToken = useCallback(
+    async (token: string) => {
+      setError(null);
+      setJoinError(null);
+      setMessages([]);
+      setUnread(0);
+      applyStatus('requesting-media', t('status.cameraPrompt'));
+
+      if (!(await acquireMedia())) return;
+      clearTimers();
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-        localStreamRef.current = stream;
-        setLocalStream(stream);
-        setMicEnabled(true);
-        setCamEnabled(true);
-        for (const track of stream.getAudioTracks()) track.enabled = true;
-        for (const track of stream.getVideoTracks()) track.enabled = true;
-        await refreshDevices();
-        await joinQueue();
+        const client = await ensureSignaling();
+        if (!client.send(C2S.sessionJoin, { token })) throw new Error(t('status.signalUnavailable'));
+        setQueuePosition(0);
+        applyStatus('waiting', t('invite.joining'));
+        if (navigator.mediaDevices) void refreshDevices();
       } catch (err) {
-        const message = describeMediaError(err);
+        if (statusRef.current === 'error') return;
+        const message = err instanceof Error ? err.message : t('status.serverUnreachable');
         setError(message);
+        setJoinError(message);
         applyStatus('error', message);
-        pushToast('error', t('toast.cameraDenied.title'), message);
+        pushToast('error', t('toast.connectFailed.title'), message);
       }
     },
-    [applyStatus, chooseSearchPrefs, joinQueue, pushToast, refreshDevices],
+    [acquireMedia, applyStatus, clearTimers, ensureSignaling, pushToast, refreshDevices],
   );
+
+  const dismissJoinError = useCallback(() => setJoinError(null), []);
 
   const next = useCallback(() => {
     const inCall =
@@ -540,6 +603,46 @@ export function useRandomChat() {
     client.send(C2S.sessionAdd);
   }, [pushToast]);
 
+  /**
+   * Asks the server for the session's invitation link. The answer arrives as
+   * invite.created and lands in `invite`; an optional cap is applied to the
+   * session first, and rotate revokes the previous link.
+   */
+  const createInvite = useCallback(
+    (max?: number, rotate = false) => {
+      const client = signalingRef.current;
+      if (!client?.isOpen || !sessionRef.current) {
+        pushToast('warn', t('toast.noSession.title'), t('toast.noSession.body'));
+        return;
+      }
+      setInviteRevoked(false);
+      client.send(
+        C2S.inviteCreate,
+        max === undefined ? { rotate } : { max_participants: max, rotate },
+      );
+    },
+    [pushToast],
+  );
+
+  const revokeInvite = useCallback(() => {
+    const client = signalingRef.current;
+    if (!client?.isOpen || !sessionRef.current) return;
+    client.send(C2S.inviteRevoke);
+  }, []);
+
+  /** Changes the member cap of the current session (0 lifts it). */
+  const updateSessionCap = useCallback(
+    (max: number) => {
+      const client = signalingRef.current;
+      if (!client?.isOpen || !sessionRef.current) {
+        pushToast('warn', t('toast.noSession.title'), t('toast.noSession.body'));
+        return;
+      }
+      client.send(C2S.sessionUpdate, { max_participants: max });
+    },
+    [pushToast],
+  );
+
   const acceptConsent = useCallback(() => {
     try {
       window.localStorage.setItem(CONSENT_KEY, 'true');
@@ -592,11 +695,29 @@ export function useRandomChat() {
       pushToast('warn', t('toast.nobodyOnline.title'), t('toast.nobodyOnline.body'));
     },
 
+    onSessionUpdated: (payload) => {
+      if (payload.mode === 'group' && sessionModeRef.current === 'solo') {
+        pushSystemMessage(t('chat.promoted'));
+      }
+      applySessionShape(payload.mode === 'group' ? 'group' : 'solo', payload.max_participants ?? 0);
+    },
+
+    onInviteCreated: (payload) => {
+      setInviteRevoked(false);
+      setInvite(payload);
+    },
+
+    onInviteRevoked: () => {
+      setInvite(null);
+      setInviteRevoked(true);
+      pushToast('info', t('invite.revoked.title'), t('invite.revoked.body'));
+    },
+
     onMatchFound: (payload) => {
       sessionRef.current = payload.session_id;
       restartAttemptsRef.current = 0;
-      setSessionMode(payload.mode === 'group' ? 'group' : 'solo');
-      setSessionMax(payload.max_participants ?? 0);
+      setJoinError(null);
+      applySessionShape(payload.mode === 'group' ? 'group' : 'solo', payload.max_participants ?? 0);
       const others = (payload.peers ?? []).filter((id) => id !== myIdRef.current);
       setMembers(payload.peers ?? []);
       setRemotePeers(others.map((id) => ({ id, stream: null })));
@@ -733,8 +854,27 @@ export function useRandomChat() {
         pushToast('info', t('server.empty_queue.title'), t('server.empty_queue.body'));
         return;
       }
-      if (payload.code === 'solo_session' || payload.code === 'session_full') {
+      if (payload.code === 'session_full') {
         pushToast('warn', t('toast.addFailed.title'), payload.message);
+        setJoinError(t('invite.full'));
+        return;
+      }
+      if (payload.code === 'invalid_token') {
+        setJoinError(t('invite.invalid'));
+        pushToast('warn', t('invite.invalid.title'), t('invite.invalid.body'));
+        return;
+      }
+      if (payload.code === 'blocked_from_session') {
+        setJoinError(t('invite.blocked'));
+        pushToast('warn', t('invite.blocked.title'), t('invite.blocked.body'));
+        return;
+      }
+      if (payload.code === 'already_in_session') {
+        setJoinError(t('invite.alreadyIn'));
+        return;
+      }
+      if (payload.code === 'invalid_limit') {
+        pushToast('warn', t('toast.invalidLimit.title'), t('toast.invalidLimit.body'));
         return;
       }
       if (payload.code === 'no_peer' || payload.code === 'not_waiting' || payload.code === 'no_session') {
@@ -898,8 +1038,13 @@ export function useRandomChat() {
     queuePosition,
     chatOpen,
     unread,
+    invite,
+    inviteRevoked,
+    joinError,
     start,
     next,
+    joinByToken,
+    dismissJoinError,
     changeSearchPrefs: chooseSearchPrefs,
     stop,
     toggleMic,
@@ -908,6 +1053,9 @@ export function useRandomChat() {
     switchMicrophone,
     sendMessage,
     addParticipant,
+    createInvite,
+    revokeInvite,
+    updateSessionCap,
     submitReport,
     blockPeer,
     acceptConsent,
@@ -923,6 +1071,9 @@ interface Handlers {
   onQueueCanceled(): void;
   onQueueTimeout(): void;
   onMatchFound(payload: MatchFound): void;
+  onSessionUpdated(payload: SessionUpdated): void;
+  onInviteCreated(payload: InviteCreated): void;
+  onInviteRevoked(payload: InviteRevoked): void;
   onOffer(sdp: SDPPayload): void;
   onAnswer(sdp: SDPPayload): void;
   onIce(candidate: ICEPayload): void;

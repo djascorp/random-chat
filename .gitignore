@@ -16,6 +16,10 @@
 .vscode/
 *.swp
 
+# Local tooling and internal docs
+.commandcode/
+/docs/
+
 # Go tooling
 *.test
 *.out

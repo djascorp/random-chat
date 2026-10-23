@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRandomChat } from './hooks/useRandomChat';
 import type { SessionMode } from './types';
 import { Landing } from './components/Landing';
+import { JoinScreen } from './components/JoinScreen';
+import { ShareDialog } from './components/ShareDialog';
 import { CallStage } from './components/CallStage';
 import { ControlBar } from './components/ControlBar';
 import { ChatPanel } from './components/ChatPanel';
@@ -25,10 +27,64 @@ function readVolume(): number {
   }
 }
 
+/** Reads /j/<token> once at mount; anything else means the home screen. */
+function readInviteToken(): string | null {
+  try {
+    const match = window.location.pathname.match(/^\/j\/([A-Za-z0-9-]{8,64})\/?$/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+interface SearchPreset {
+  mode: SessionMode;
+  max: number;
+  /** True when the URL carried at least one valid preset parameter. */
+  preset: boolean;
+}
+
+/**
+ * Reads ?mode=&max= once at mount. Invalid values are silently ignored in
+ * favour of safe defaults, so a crafted link can never break the form.
+ */
+function readSearchPreset(): SearchPreset {
+  const fallback: SearchPreset = { mode: 'solo', max: 0, preset: false };
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('mode') && !params.has('max')) return fallback;
+    let mode: SessionMode = 'solo';
+    let max = 0;
+    let valid = false;
+    const rawMode = (params.get('mode') ?? '').toLowerCase();
+    if (rawMode === 'solo' || rawMode === 'group') {
+      mode = rawMode;
+      valid = true;
+    }
+    const rawMax = (params.get('max') ?? '').trim();
+    if (rawMax !== '') {
+      if (!/^\d{1,3}$/.test(rawMax)) return { mode: 'solo', max: 0, preset: false };
+      const parsed = Number.parseInt(rawMax, 10);
+      if (parsed !== 0 && (parsed < 2 || parsed > 99)) return { mode: 'solo', max: 0, preset: false };
+      max = parsed;
+      valid = true;
+    }
+    if (mode === 'solo') max = 0;
+    return valid ? { mode, max, preset: true } : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function App() {
   const chat = useRandomChat();
   const [reportOpen, setReportOpen] = useState(false);
   const [reportTarget, setReportTarget] = useState<string | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  // /j/<token> opens the invitation screen; ?mode=&max= presets the search.
+  // Both are read once at mount: the app never reads the URL afterwards.
+  const [joinToken, setJoinToken] = useState<string | null>(readInviteToken);
+  const [preset] = useState(readSearchPreset);
   const [volume, setVolume] = useState<number>(readVolume);
   const [controlsVisible, setControlsVisible] = useState(true);
   const idleTimerRef = useRef<number | null>(null);
@@ -38,10 +94,10 @@ export default function App() {
     chat.status === 'connected' || chat.status === 'connecting' || chat.status === 'reconnecting';
   const showControls = active && chat.status !== 'error';
   const controlsDimmed = inCall && !controlsVisible;
-  const isGroup = chat.sessionMode === 'group';
   const membersCount = chat.members.length;
-  const canAdd =
-    isGroup && inCall && (chat.sessionMax === 0 || membersCount < chat.sessionMax);
+  // Ajouter works from any live session: a solo call is promoted on the way.
+  const canAdd = inCall && (chat.sessionMax === 0 || membersCount < chat.sessionMax);
+  const inSession = membersCount > 0;
 
   const maxRunes = chat.hello?.limits.max_chat_runes ?? DEFAULT_MAX_RUNES;
   const turnConfigured =
@@ -65,6 +121,30 @@ export default function App() {
     },
     [chat],
   );
+
+  const handleJoinByToken = useCallback(
+    (token: string) => {
+      void chat.joinByToken(token);
+    },
+    [chat],
+  );
+
+  // Leaving the invitation screen returns to a clean home URL.
+  const handleJoinBack = useCallback(() => {
+    chat.stop();
+    chat.dismissJoinError();
+    setJoinToken(null);
+    try {
+      window.history.replaceState(null, '', '/');
+    } catch {
+      /* private mode or embedded frame — the token just stays in the URL */
+    }
+  }, [chat]);
+
+  const openShare = useCallback(() => {
+    if (chat.members.length === 0) return;
+    setShareOpen(true);
+  }, [chat.members.length]);
 
   // Tiles in a conference act on one peer; the solo Plus menu acts on the
   // single other participant by default.
@@ -99,7 +179,7 @@ export default function App() {
   // WhatsApp behaviour: during a live call the bar fades away after a few
   // idle seconds and comes back on any input. Never hidden while a panel or
   // dialog is open, while searching, or on error screens.
-  const dimActive = inCall && !chat.chatOpen && !reportOpen;
+  const dimActive = inCall && !chat.chatOpen && !reportOpen && !shareOpen;
   const bumpControls = useCallback(() => {
     setControlsVisible(true);
     if (idleTimerRef.current !== null) window.clearTimeout(idleTimerRef.current);
@@ -162,6 +242,10 @@ export default function App() {
           event.preventDefault();
           chat.addParticipant();
           break;
+        case 'i':
+          event.preventDefault();
+          openShare();
+          break;
         case 'm':
           event.preventDefault();
           chat.toggleMic();
@@ -184,7 +268,7 @@ export default function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [chat, reportOpen]);
+  }, [chat, reportOpen, openShare]);
 
   return (
     <LangProvider>
@@ -240,12 +324,23 @@ export default function App() {
             onReportPeer={handleReportPeer}
             onBlockPeer={handleBlockPeer}
           />
+        ) : joinToken ? (
+          <JoinScreen
+            token={joinToken}
+            status={chat.status}
+            joinError={chat.joinError}
+            onJoin={handleJoinByToken}
+            onBack={handleJoinBack}
+          />
         ) : (
           <Landing
             online={chat.publicStats?.online ?? null}
             activeSessions={chat.publicStats?.active_sessions ?? null}
             matchesTotal={chat.publicStats?.matches_total ?? null}
             turnConfigured={turnConfigured}
+            initialMode={preset.mode}
+            initialMax={preset.max}
+            preset={preset.preset}
             onStart={handleStart}
             busy={false}
           />
@@ -257,7 +352,6 @@ export default function App() {
           micEnabled={chat.micEnabled}
           camEnabled={chat.camEnabled}
           inCall={inCall}
-          isGroup={isGroup}
           canAdd={canAdd}
           chatOpen={chat.chatOpen}
           unread={chat.unread}
@@ -269,12 +363,15 @@ export default function App() {
           dimmed={controlsDimmed}
           searchMode={chat.searchMode}
           searchMax={chat.searchMax}
+          sessionMax={chat.sessionMax}
           onSearchPrefs={chat.changeSearchPrefs}
           onToggleMic={chat.toggleMic}
           onToggleCam={chat.toggleCam}
           onNext={chat.next}
           onStop={chat.stop}
           onAdd={chat.addParticipant}
+          onInvite={openShare}
+          onUpdateCap={chat.updateSessionCap}
           onToggleChat={() => chat.setChatOpen(!chat.chatOpen)}
           onReport={() => openReport()}
           onBlock={() => chat.blockPeer(reportTargets[0]?.id)}
@@ -302,6 +399,16 @@ export default function App() {
         onSubmit={(category, reason, block, targetId) =>
           chat.submitReport(category, reason, block, targetId || undefined)
         }
+      />
+
+      <ShareDialog
+        open={shareOpen && inSession}
+        invite={chat.invite}
+        revoked={chat.inviteRevoked}
+        sessionMax={chat.sessionMax}
+        onRequest={(max, rotate) => chat.createInvite(max, rotate)}
+        onRevoke={chat.revokeInvite}
+        onClose={() => setShareOpen(false)}
       />
 
       {!chat.consentAccepted ? <ConsentGate onAccept={chat.acceptConsent} /> : null}

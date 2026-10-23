@@ -17,6 +17,7 @@ type Store interface {
 	CreateSession(ctx context.Context, s *Session) error
 	AddSessionParticipant(ctx context.Context, sessionID, peerID string) error
 	EndSession(ctx context.Context, id string, at time.Time, status SessionStatus, reason string) error
+	UpdateSessionShape(ctx context.Context, id, mode string, max int) error
 
 	CreateReport(ctx context.Context, r *Report) error
 	ListReports(ctx context.Context, status ReportStatus, limit int) ([]Report, error)

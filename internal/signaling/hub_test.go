@@ -48,15 +48,60 @@ func newTestHub(t *testing.T) *Hub {
 	cfg := testConfig()
 	store := storage.NewMemory()
 	manager := sessions.NewManager(store, discardLogger())
+	moderationService := moderation.NewService(t.Context(), store, moderation.Options{SuspendDuration: time.Minute}, discardLogger())
 	return NewHub(HubOptions{
 		Config:     cfg,
 		Store:      store,
 		Sessions:   manager,
-		Matcher:    matching.NewMatcher(matching.Options{QueueTimeout: cfg.QueueTimeout, Sessions: manager, Logger: discardLogger()}),
-		Moderation: moderation.NewService(t.Context(), store, moderation.Options{SuspendDuration: time.Minute}, discardLogger()),
+		Matcher:    matching.NewMatcher(matching.Options{QueueTimeout: cfg.QueueTimeout, Sessions: manager, Blocks: moderationService, Logger: discardLogger()}),
+		Moderation: moderationService,
 		Metrics:    metrics.New(),
 		Logger:     discardLogger(),
 	})
+}
+
+func awaitErrorCode(t *testing.T, c *testClient, want string) {
+	t.Helper()
+	env := c.await(EvtError, 2*time.Second)
+	var payload ErrorPayload
+	mustDecode(t, env.Data, &payload)
+	if payload.Code != want {
+		t.Fatalf("error code = %q, want %q (message %q)", payload.Code, want, payload.Message)
+	}
+}
+
+func awaitSessionUpdated(t *testing.T, c *testClient) SessionUpdatedPayload {
+	t.Helper()
+	env := c.await(EvtSessionUpdated, 2*time.Second)
+	var payload SessionUpdatedPayload
+	mustDecode(t, env.Data, &payload)
+	return payload
+}
+
+// matchSolo pairs two clients 1:1 and returns their shared session id.
+func matchSolo(t *testing.T, hub *Hub, a, b *testClient) string {
+	t.Helper()
+	a.send(EvtQueueJoin, nil)
+	b.send(EvtQueueJoin, nil)
+	matchA := decodeMatch(t, a.await(EvtMatchFound, 2*time.Second))
+	decodeMatch(t, b.await(EvtMatchFound, 2*time.Second))
+	sessionID, _ := matchA["session_id"].(string)
+	if sessionID == "" {
+		t.Fatal("match.found carries no session id")
+	}
+	return sessionID
+}
+
+func createInvite(t *testing.T, c *testClient, payload any) InviteCreatedPayload {
+	t.Helper()
+	c.send(EvtInviteCreate, payload)
+	env := c.await(EvtInviteCreated, 2*time.Second)
+	var created InviteCreatedPayload
+	mustDecode(t, env.Data, &created)
+	if created.Token == "" {
+		t.Fatal("invite.created carries no token")
+	}
+	return created
 }
 
 func discardLogger() *slog.Logger {
@@ -749,6 +794,286 @@ func TestWebSocketOriginPolicy(t *testing.T) {
 			t.Fatalf("status = %s, want 403 Forbidden", statusText(resp))
 		}
 	})
+}
+
+// TestInviteJoinPromotesSolo covers the F2 path end to end: a link minted
+// from a solo call lets a third browser in directly, promoting the room to a
+// conference announced before the newcomer, with SDP relay working after.
+func TestInviteJoinPromotesSolo(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	sessionID := matchSolo(t, hub, a, b)
+
+	created := createInvite(t, a, nil)
+	if created.Mode != "solo" {
+		t.Fatalf("invite mode = %q, want solo", created.Mode)
+	}
+
+	c := dial(t, srv, "client-cccccccc")
+	c.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+
+	joined := decodeMatch(t, c.await(EvtMatchFound, 2*time.Second))
+	if got := len(peerIDs(t, joined)); got != 3 {
+		t.Fatalf("joiner sees %d peers, want 3", got)
+	}
+	// The room learns its new shape before the newcomer is announced.
+	for _, m := range []*testClient{a, b} {
+		updated := awaitSessionUpdated(t, m)
+		if updated.SessionID != sessionID || updated.Mode != "group" {
+			t.Fatalf("session.updated = %+v, want mode group for %s", updated, sessionID)
+		}
+		notice := m.await(EvtPeerJoined, 2*time.Second)
+		var peerPayload PeerJoinedPayload
+		mustDecode(t, notice.Data, &peerPayload)
+		if peerPayload.PeerID != c.userID {
+			t.Fatalf("peer.joined announces %q, want %q", peerPayload.PeerID, c.userID)
+		}
+	}
+
+	// Signaling reaches across the new mesh link.
+	c.send(EvtRTCOffer, SDPPayload{Type: "offer", SDP: "v=0", To: a.userID})
+	relayed := a.await(EvtRTCOffer, 2*time.Second)
+	var sdp SDPPayload
+	mustDecode(t, relayed.Data, &sdp)
+	if sdp.From != c.userID {
+		t.Fatalf("relayed offer from = %q, want %q", sdp.From, c.userID)
+	}
+
+	if got := hub.metrics.InvitesCreated.Value(); got != 1 {
+		t.Fatalf("invites created = %d, want 1", got)
+	}
+	if got := hub.metrics.InviteJoins.Value(); got != 1 {
+		t.Fatalf("invite joins = %d, want 1", got)
+	}
+	if got := hub.metrics.SessionPromotions.Value(); got != 1 {
+		t.Fatalf("promotions = %d, want 1", got)
+	}
+}
+
+// TestInviteRevokeBlocksFutureJoins: revoking kills the link (invalid_token
+// for latecomers) without ejecting anyone already in the room.
+func TestInviteRevokeBlocksFutureJoins(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	matchSolo(t, hub, a, b)
+
+	created := createInvite(t, a, nil)
+	a.send(EvtInviteRevoke, nil)
+	revoked := a.await(EvtInviteRevoked, 2*time.Second)
+	var revokedPayload InviteRevokedPayload
+	mustDecode(t, revoked.Data, &revokedPayload)
+	if revokedPayload.SessionID == "" {
+		t.Fatal("invite.revoked carries no session id")
+	}
+	// Every member learns the link is dead, including the revoker.
+	b.await(EvtInviteRevoked, 2*time.Second)
+
+	c := dial(t, srv, "client-cccccccc")
+	c.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	awaitErrorCode(t, c, "invalid_token")
+
+	if got := hub.sessions.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want the room to survive the revoke", got)
+	}
+}
+
+// TestInviteRotateReplacesToken: regenerating mints a fresh link and kills
+// the previous one.
+func TestInviteRotateReplacesToken(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	matchSolo(t, hub, a, b)
+
+	first := createInvite(t, a, nil)
+	second := createInvite(t, a, InviteCreatePayload{Rotate: true})
+	if second.Token == first.Token {
+		t.Fatal("rotated link must carry a fresh token")
+	}
+
+	c := dial(t, srv, "client-cccccccc")
+	c.send(EvtSessionJoin, SessionJoinPayload{Token: first.Token})
+	awaitErrorCode(t, c, "invalid_token")
+
+	d := dial(t, srv, "client-dddddddd")
+	d.send(EvtSessionJoin, SessionJoinPayload{Token: second.Token})
+	joined := decodeMatch(t, d.await(EvtMatchFound, 2*time.Second))
+	if got := len(peerIDs(t, joined)); got != 3 {
+		t.Fatalf("joiner sees %d peers, want 3", got)
+	}
+}
+
+// TestInviteJoinFullSession: a capped room refuses link joins with
+// session_full and keeps serving its members.
+func TestInviteJoinFullSession(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	joinGroup(t, a, 2)
+	a.await(EvtQueueWaiting, 2*time.Second)
+	joinGroup(t, b, 0)
+	a.await(EvtMatchFound, 2*time.Second)
+	b.await(EvtMatchFound, 2*time.Second)
+
+	created := createInvite(t, a, nil)
+	c := dial(t, srv, "client-cccccccc")
+	c.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	awaitErrorCode(t, c, "session_full")
+
+	if got := hub.sessions.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+}
+
+// TestInviteJoinBlockedPeer: a link does not smuggle a blocked user past the
+// room — blocked_from_session, and the room is unchanged.
+func TestInviteJoinBlockedPeer(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	matchSolo(t, hub, a, b)
+
+	created := createInvite(t, a, nil)
+	c := dial(t, srv, "client-cccccccc")
+	if err := hub.moderation.Block(a.userID, c.userID); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	c.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	awaitErrorCode(t, c, "blocked_from_session")
+
+	if got := hub.sessions.ActiveCount(); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+}
+
+// TestSessionJoinWhileInCall: session.join from inside a call is rejected so
+// a peer can never belong to two sessions.
+func TestSessionJoinWhileInCall(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	matchSolo(t, hub, a, b)
+	created := createInvite(t, a, nil)
+
+	a.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	awaitErrorCode(t, a, "already_in_session")
+}
+
+// TestSessionUpdateCap: any member may change the cap (0 or >= 2); the room
+// is told, newcomers are blocked past it, and nobody is ejected when the cap
+// drops below the headcount.
+func TestSessionUpdateCap(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	joinGroup(t, a, 0)
+	a.await(EvtQueueWaiting, 2*time.Second)
+	joinGroup(t, b, 0)
+	a.await(EvtMatchFound, 2*time.Second)
+	b.await(EvtMatchFound, 2*time.Second)
+
+	a.send(EvtSessionUpdate, SessionUpdatePayload{MaxParticipants: 1})
+	awaitErrorCode(t, a, "invalid_limit")
+
+	a.send(EvtSessionUpdate, SessionUpdatePayload{MaxParticipants: 2})
+	for _, m := range []*testClient{a, b} {
+		updated := awaitSessionUpdated(t, m)
+		if updated.MaxParticipants != 2 {
+			t.Fatalf("session.updated cap = %d, want 2", updated.MaxParticipants)
+		}
+	}
+
+	created := createInvite(t, a, nil)
+	c := dial(t, srv, "client-cccccccc")
+	c.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	awaitErrorCode(t, c, "session_full")
+
+	// Lifting the cap lets the next joiner in.
+	b.send(EvtSessionUpdate, SessionUpdatePayload{MaxParticipants: 0})
+	a.await(EvtSessionUpdated, 2*time.Second)
+	b.await(EvtSessionUpdated, 2*time.Second)
+	d := dial(t, srv, "client-dddddddd")
+	d.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	joined := decodeMatch(t, d.await(EvtMatchFound, 2*time.Second))
+	if got := len(peerIDs(t, joined)); got != 3 {
+		t.Fatalf("joiner sees %d peers, want 3", got)
+	}
+}
+
+// TestSessionAddPromotesSolo: the Ajouter button works from a solo call — the
+// room is promoted, announced, then grown.
+func TestSessionAddPromotesSolo(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	sessionID := matchSolo(t, hub, a, b)
+
+	c := dial(t, srv, "client-cccccccc")
+	joinGroup(t, c, 0)
+	c.await(EvtQueueWaiting, 2*time.Second)
+
+	a.send(EvtSessionAdd, nil)
+	joined := decodeMatch(t, c.await(EvtMatchFound, 2*time.Second))
+	if got := len(peerIDs(t, joined)); got != 3 {
+		t.Fatalf("room has %d members after add, want 3", got)
+	}
+	for _, m := range []*testClient{a, b} {
+		updated := awaitSessionUpdated(t, m)
+		if updated.SessionID != sessionID || updated.Mode != "group" {
+			t.Fatalf("session.updated = %+v, want mode group", updated)
+		}
+		m.await(EvtPeerJoined, 2*time.Second)
+	}
+	if got := hub.metrics.SessionPromotions.Value(); got != 1 {
+		t.Fatalf("promotions = %d, want 1", got)
+	}
+}
+
+// TestSessionEndsKillInvite: when everyone leaves, the link dies with the
+// room — a token that outlives its session never grants access.
+func TestSessionEndsKillInvite(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer srv.Close()
+
+	a := dial(t, srv, "client-aaaaaaaa")
+	b := dial(t, srv, "client-bbbbbbbb")
+	matchSolo(t, hub, a, b)
+	created := createInvite(t, a, nil)
+
+	a.send(EvtSessionLeave, nil)
+	a.await(EvtStateChanged, 2*time.Second)
+	b.await(EvtSessionEnded, 2*time.Second)
+
+	c := dial(t, srv, "client-cccccccc")
+	c.send(EvtSessionJoin, SessionJoinPayload{Token: created.Token})
+	awaitErrorCode(t, c, "invalid_token")
 }
 
 func statusText(resp *http.Response) string {
