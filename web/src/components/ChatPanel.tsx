@@ -76,7 +76,7 @@ export function ChatPanel({ open, messages, connected, status, maxRunes, onClose
         ) : null}
         {messages.length === 0 && !banner ? (
           <p className="chat__empty">
-            Aucun message. Le chat est utile si le son ou l’image ne passent pas correctement.
+            {t('chat.empty')}
           </p>
         ) : (
           messages.map((message) =>

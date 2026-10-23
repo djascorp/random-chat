@@ -166,6 +166,7 @@ const STRINGS = {
   'chat.standby': { en: 'Available during the conversation', fr: 'Disponible pendant la conversation' },
   'chat.close': { en: 'Close chat', fr: 'Fermer le chat' },
   'chat.messages': { en: 'Messages', fr: 'Messages' },
+  'chat.empty': { en: 'No messages yet. Chat helps when sound or video does not work properly.', fr: 'Aucun message. Le chat est utile si le son ou l’image ne passent pas correctement.' },
   'chat.system': { en: 'System message', fr: 'Message système' },
   'chat.pending': { en: ' · sending…', fr: ' · envoi…' },
   'chat.sent': { en: ' · sent', fr: ' · envoyé' },
