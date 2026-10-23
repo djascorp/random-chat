@@ -10,7 +10,7 @@ import { ChatPanel } from './components/ChatPanel';
 import { ReportDialog } from './components/ReportDialog';
 import { ConsentGate } from './components/ConsentGate';
 import { Toasts } from './components/Toasts';
-import { SparkIcon } from './components/Icons';
+import logoUrl from './assets/logo.png';
 import { LangProvider, LangSwitcher } from './i18n';
 
 const DEFAULT_MAX_RUNES = 1000;
@@ -283,7 +283,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <span className="brand__mark">
-            <SparkIcon size={18} />
+            <img src={logoUrl} alt="" width={30} height={30} />
           </span>
           <span className="brand__name">
             Random<span className="brand__accent">Chat</span>

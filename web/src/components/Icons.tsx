@@ -242,22 +242,6 @@ export const UserPlusIcon = ({ size = 20, className }: IconProps) =>
     </>,
   );
 
-export const SparkIcon = ({ size = 20, className }: IconProps) =>
-  base(
-    size,
-    className,
-    <>
-      <path d="M12 3v3" />
-      <path d="M12 18v3" />
-      <path d="M3 12h3" />
-      <path d="M18 12h3" />
-      <path d="M6.2 6.2l2.1 2.1" />
-      <path d="M15.7 15.7l2.1 2.1" />
-      <path d="M17.8 6.2l-2.1 2.1" />
-      <path d="M8.3 15.7l-2.1 2.1" />
-    </>,
-  );
-
 export const VolumeIcon = ({ size = 20, className }: IconProps) =>
   base(
     size,
