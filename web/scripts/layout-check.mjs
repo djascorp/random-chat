@@ -156,6 +156,24 @@ const MEASURE = `(() => {
   }).length;
   const b = box('.controls');
   const remote = box('.stage__remote');
+  // The frame is shaped to the camera, so the frame's box no longer says how
+  // much picture is on screen: contain may letterbox it. Work out the
+  // painted rectangle from the decoded size instead.
+  const video = document.querySelector('.stage__remote video');
+  const streamAspect = video && video.videoWidth > 0 && video.videoHeight > 0
+    ? video.videoWidth / video.videoHeight
+    : null;
+  let painted = null;
+  if (remote) {
+    painted = { w: remote.w, h: remote.h };
+    if (streamAspect) {
+      if (remote.w / remote.h > streamAspect) {
+        painted.w = Math.round(remote.h * streamAspect);
+      } else {
+        painted.h = Math.round(remote.w / streamAspect);
+      }
+    }
+  }
   const composer = box('.chat__composer');
   const local = box('.stage__local');
   const doc = document.documentElement;
@@ -177,6 +195,9 @@ const MEASURE = `(() => {
     barHeight: b ? b.h : null,
     bar: b,
     remote,
+    painted,
+    streamAspect,
+    frameAspect: remote && remote.h > 0 ? remote.w / remote.h : null,
     local,
     chatOpen: document.querySelector('.chat')?.classList.contains('is-open') ?? false,
     composer,
@@ -185,7 +206,9 @@ const MEASURE = `(() => {
     barCoversVideo: b && remote ? b.top < remote.bottom && b.bottom > remote.top && b.left < remote.right && b.right > remote.left : null,
     composerInViewport: composer ? composer.bottom <= innerHeight + 1 : null,
     localInsideVideo: local && remote ? local.right <= remote.right + 1 && local.bottom <= remote.bottom + 1 : null,
-    videoUsable: remote ? remote.h >= 180 : null,
+    // 150px is the honest floor: the narrowest viewport can only show a
+    // landscape camera at ~162px tall once it fills the width.
+    videoUsable: painted ? painted.h >= 150 : null,
   });
 })()`;
 
@@ -268,11 +291,19 @@ try {
     await sleep(450);
 
     const m = JSON.parse(await a.eval(MEASURE));
-    console.log(`${viewport.name}  bar=${m.bar?.w}x${m.barHeight} rows=${m.firstRowItems}/${m.controlsTotal} labels=${m.controlsWithLabel} scroll=${m.pageScrollPx}px video=${m.remote?.w}x${m.remote?.h}`);
+    console.log(`${viewport.name}  bar=${m.bar?.w}x${m.barHeight} rows=${m.firstRowItems}/${m.controlsTotal} labels=${m.controlsWithLabel} scroll=${m.pageScrollPx}px frame=${m.remote?.w}x${m.remote?.h} picture=${m.painted?.w}x${m.painted?.h}`);
 
     record(viewport.name, 'page does not scroll', m.pageScrollPx <= 1, `${m.pageScrollPx}px of overflow`);
     record(viewport.name, 'control bar does not cover the video', m.barCoversVideo === false, String(m.barCoversVideo));
-    record(viewport.name, 'video keeps a usable height', m.videoUsable === true, `${m.remote?.h}px`);
+    record(viewport.name, 'video keeps a usable height', m.videoUsable === true, `${m.painted?.h}px`);
+    // The point of the shaped frame: no letterboxing means the frame's ratio
+    // is the camera's ratio.
+    record(
+      viewport.name,
+      'frame matches the camera aspect',
+      m.streamAspect === null || Math.abs(m.frameAspect - m.streamAspect) < 0.02,
+      `frame=${m.frameAspect?.toFixed(3)} camera=${m.streamAspect?.toFixed(3)}`,
+    );
     record(viewport.name, 'self view stays inside the video', m.localInsideVideo === true, String(m.localInsideVideo));
     record(viewport.name, 'self view is painted above the video', m.localTopmost === true, String(m.localTopmost));
     record(

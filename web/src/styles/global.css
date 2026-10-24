@@ -614,11 +614,26 @@ input {
   border-color: var(--bad-border);
 }
 
-.stage__remote {
+/* Centring box for the video frame. It fills the space the stage gives it and
+   CallStage sizes the frame inside to the camera's ratio. */
+.stage__frame {
   position: relative;
+  display: grid;
+  place-items: center;
   flex: 1;
-  width: min(100%, 1180px);
-  margin-inline: auto;
+  width: 100%;
+  min-height: 0;
+}
+
+.stage__remote {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  /* The frame takes the camera's own shape, so the picture is never cropped
+     and no dead bars are left inside it. CallStage writes the measured width
+     and height inline; this is the fill used before the first measurement. */
+  width: 100%;
+  height: 100%;
   /* No hard height floor: the shell already bounds the stage, and a floor here
      would push the layout past the viewport on short screens. */
   min-height: 0;
@@ -629,6 +644,16 @@ input {
   box-shadow: var(--shadow);
 }
 
+/* Fullscreen is the one place where the frame must fill the screen; the video
+   inside keeps `contain` and is centred on the dark background. */
+.stage__remote:fullscreen {
+  /* Inline sizing from CallStage must not win while fullscreen. */
+  width: 100vw !important;
+  height: 100vh !important;
+  border: 0;
+  border-radius: 0;
+}
+
 .stage__remote.is-live {
   border-color: var(--signal-border);
   box-shadow: 0 0 0 1px rgba(76, 195, 138, 0.1), var(--shadow);
@@ -636,13 +661,16 @@ input {
 
 /* The video is taken out of flow: a <video> reports an intrinsic size derived
    from the stream, and letting it participate in the flex layout made the stage
-   grow taller than the viewport (161px of overflow at 1180x700). */
+   grow taller than the viewport (161px of overflow at 1180x700).
+   `contain`, not `cover`: the frame must never crop the camera. A camera that
+   is not the frame's shape is letterboxed on the dark background instead of
+   being zoomed until its edges disappear. */
 .stage__video {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
   background: #050506;
 }
@@ -675,7 +703,9 @@ input {
 .tile__video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Conference tiles show the whole camera too; the tile is compact enough
+     that hiding the edges of a participant would be worse than a small bar. */
+  object-fit: contain;
   display: block;
   background: #050506;
 }
@@ -812,7 +842,9 @@ input {
   right: 16px;
   bottom: 16px;
   width: clamp(120px, 22vw, 208px);
-  aspect-ratio: 4 / 3;
+  /* Driven by the camera's decoded frame (CallStage writes the custom
+     property), so a portrait phone does not get squeezed into a 4:3 box. */
+  aspect-ratio: var(--local-aspect, 4 / 3);
   border-radius: var(--radius);
   overflow: hidden;
   border: 1px solid var(--border-strong);
@@ -823,7 +855,7 @@ input {
 .stage__local-video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 
@@ -923,5 +955,26 @@ input {
 
   .stage__local {
     width: clamp(84px, 18vw, 140px);
+  }
+}
+
+/* Portrait camera: the height is the reference, the width follows from the
+   stream's aspect ratio. The selector is deliberately more specific than the
+   `.stage__local` width rules above, including the responsive ones, so the
+   forced width never comes back. */
+.stage__local.stage__local--portrait {
+  width: auto;
+  height: clamp(120px, 26vh, 208px);
+}
+
+@media (max-width: 820px) {
+  .stage__local.stage__local--portrait {
+    height: clamp(110px, 24vh, 168px);
+  }
+}
+
+@media (max-height: 560px) {
+  .stage__local.stage__local--portrait {
+    height: clamp(84px, 30vh, 140px);
   }
 }

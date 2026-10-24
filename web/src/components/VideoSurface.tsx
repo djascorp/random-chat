@@ -10,6 +10,8 @@ interface VideoSurfaceProps {
   volume?: number;
   /** Escape hatch for imperative APIs (fullscreen, Picture-in-Picture). */
   elementRef?: (element: HTMLVideoElement | null) => void;
+  /** Reports the decoded frame size so the surface can be shaped to it. */
+  onIntrinsicSize?: (width: number, height: number) => void;
 }
 
 /**
@@ -19,7 +21,16 @@ interface VideoSurfaceProps {
  * and `play()` is retried because some browsers reject autoplay until the
  * element is visible.
  */
-export function VideoSurface({ stream, muted, mirrored, className, label, volume, elementRef }: VideoSurfaceProps) {
+export function VideoSurface({
+  stream,
+  muted,
+  mirrored,
+  className,
+  label,
+  volume,
+  elementRef,
+  onIntrinsicSize,
+}: VideoSurfaceProps) {
   const ref = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -34,6 +45,27 @@ export function VideoSurface({ stream, muted, mirrored, className, label, volume
       });
     }
   }, [stream]);
+
+  // The element is the only reliable source for the frame's aspect ratio: a
+  // track's reported settings can lag or stay empty on remote streams, while
+  // videoWidth/videoHeight always describe what is actually on screen. The
+  // resize event fires when a camera rotates or changes resolution mid-call.
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !onIntrinsicSize) return;
+    const report = () => {
+      if (element.videoWidth > 0 && element.videoHeight > 0) {
+        onIntrinsicSize(element.videoWidth, element.videoHeight);
+      }
+    };
+    report();
+    element.addEventListener('loadedmetadata', report);
+    element.addEventListener('resize', report);
+    return () => {
+      element.removeEventListener('loadedmetadata', report);
+      element.removeEventListener('resize', report);
+    };
+  }, [stream, onIntrinsicSize]);
 
   useEffect(() => {
     const element = ref.current;
